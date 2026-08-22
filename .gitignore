@@ -1,0 +1,9 @@
+data/
+runs/
+.venv/
+__pycache__/
+*.pyc
+*.npz
+*.pt
+.DS_Store
+.ipynb_checkpoints/
