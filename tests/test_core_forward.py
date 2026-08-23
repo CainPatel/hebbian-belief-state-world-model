@@ -1,3 +1,4 @@
+import pytest
 import torch
 import torch.nn.functional as F
 
@@ -53,6 +54,18 @@ def test_loss_mask_matches_manual():
     manual = F.cross_entropy(logits[:, mask].reshape(-1, 10), tgt[:, mask].reshape(-1))
     assert torch.allclose(loss, manual)
     assert torch.allclose(masked_ce(logits, tgt, mask), manual)
+
+
+def test_empty_loss_mask_raises():
+    torch.manual_seed(0)
+    core = HBWMCore(HBWMConfig(**TINY)).eval()
+    idx = torch.randint(0, 10, (2, 12))
+    tgt = torch.randint(0, 10, (2, 12))
+    mask = torch.zeros(12, dtype=torch.bool)
+    with pytest.raises(ValueError):
+        core(idx, tgt, loss_mask=mask)
+    with pytest.raises(ValueError):
+        masked_ce(core(idx)[0], tgt, mask)
 
 
 def test_return_internals_shapes():

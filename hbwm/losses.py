@@ -9,4 +9,6 @@ def masked_ce(logits: torch.Tensor, targets: torch.Tensor, loss_mask: torch.Tens
     m = loss_mask.to(torch.bool)
     if m.dim() == 1:
         m = m.unsqueeze(0).expand(targets.size(0), -1)
+    if not m.any():
+        raise ValueError("loss_mask selects no positions")
     return F.cross_entropy(logits[m], targets[m])
