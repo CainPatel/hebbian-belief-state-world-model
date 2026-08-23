@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from hbwm.baselines.rwkv import RWKVConfig, RWKVLM, wkv_chunked, wkv_sequential, wkv_step
+from hbwm.baselines.rwkv import RWKVLM, RWKVConfig, wkv_chunked, wkv_sequential, wkv_step
 
 TINY = RWKVConfig(vocab_size=34, n_embd=16, n_layer=2, chunk_size=5)
 
@@ -97,5 +97,5 @@ def test_overfit_tiny_batch():
         opt.zero_grad()
         loss.backward()
         opt.step()
-        losses.append(float(loss))
+        losses.append(loss.item())
     assert losses[-1] < 0.5 * losses[0]

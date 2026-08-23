@@ -40,7 +40,7 @@ def h3_latency(p_old, p_new, steps, ep):
         flips = np.where((p_new[m] > p_old[m])[order])[0]
         if len(flips):
             lat.append(int(steps[m][order][flips[0]]))
-    frac = (sum(1 for l in lat if l <= 5) / n_ep) if n_ep else float("nan")
+    frac = (sum(1 for v in lat if v <= 5) / n_ep) if n_ep else float("nan")
     return {"n_episodes": int(n_ep), "n_flipped": len(lat), "latencies": lat,
             "median_latency": (float(np.median(lat)) if lat else None), "frac_le5": frac, "supported": bool(frac >= 0.7)}
 

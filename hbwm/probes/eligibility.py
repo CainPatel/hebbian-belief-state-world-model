@@ -60,7 +60,7 @@ def sample_pairs(d, rng: np.random.Generator, per_obj: int = 8) -> PairSet:
     bk = bucket_of(d.steps_since_seen)
     oracle = last_seen_cell(d)
     cells = cell_id(d.obj_pos, d.G)
-    E, T, O, L_, B_, S_ = [], [], [], [], [], []
+    E, T, OB, L_, B_, S_ = [], [], [], [], [], []
     for ep in range(d.n):
         for k in range(d.n_obj):
             ts = np.where(el[ep, :, k])[0]
@@ -78,11 +78,15 @@ def sample_pairs(d, rng: np.random.Generator, per_obj: int = 8) -> PairSet:
                     if groups[b] and len(chosen) < per_obj:
                         chosen.append(groups[b].pop())
             for t in chosen:
-                E.append(ep); T.append(t); O.append(k)
-                L_.append(int(cells[ep, t, k])); B_.append(int(bk[ep, t, k])); S_.append(int(d.steps_since_seen[ep, t, k]))
-    E, T, O = np.array(E, dtype=np.int64), np.array(T, dtype=np.int64), np.array(O, dtype=np.int64)
-    return PairSet(ep=E, t=T, obj=O, label=np.array(L_, dtype=np.int64), bucket=np.array(B_, dtype=np.int64),
-                   oracle=oracle[E, T, O] if len(E) else np.zeros(0, dtype=np.int64), sss=np.array(S_, dtype=np.int64))
+                E.append(ep)
+                T.append(t)
+                OB.append(k)
+                L_.append(int(cells[ep, t, k]))
+                B_.append(int(bk[ep, t, k]))
+                S_.append(int(d.steps_since_seen[ep, t, k]))
+    E, T, OB = np.array(E, dtype=np.int64), np.array(T, dtype=np.int64), np.array(OB, dtype=np.int64)
+    return PairSet(ep=E, t=T, obj=OB, label=np.array(L_, dtype=np.int64), bucket=np.array(B_, dtype=np.int64),
+                   oracle=oracle[E, T, OB] if len(E) else np.zeros(0, dtype=np.int64), sss=np.array(S_, dtype=np.int64))
 
 
 @dataclasses.dataclass
@@ -101,13 +105,17 @@ class H3Pairs:
 
 def h3_pairs(d) -> H3Pairs:
     """All (t >= reobserved_t) for the moved object in moved-and-re-observed episodes."""
-    E, T, O, OLD, NEW, S, V = [], [], [], [], [], [], []
+    E, T, OB, OLD, NEW, S, V = [], [], [], [], [], [], []
     for ep in np.where(d.moved & (d.reobserved_t >= 0))[0]:
         k, tr = int(d.move_obj[ep]), int(d.reobserved_t[ep])
         for t in range(tr, d.L + 1):
-            E.append(ep); T.append(t); O.append(k)
-            OLD.append(int(cell_id(d.move_from[ep], d.G))); NEW.append(int(cell_id(d.move_to[ep], d.G)))
-            S.append(t - tr); V.append(bool(d.visible[ep, t, k]))
+            E.append(ep)
+            T.append(t)
+            OB.append(k)
+            OLD.append(int(cell_id(d.move_from[ep], d.G)))
+            NEW.append(int(cell_id(d.move_to[ep], d.G)))
+            S.append(t - tr)
+            V.append(bool(d.visible[ep, t, k]))
     arr = lambda x, dt=np.int64: np.array(x, dtype=dt)  # noqa: E731
-    return H3Pairs(ep=arr(E), t=arr(T), obj=arr(O), old_cell=arr(OLD), new_cell=arr(NEW),
+    return H3Pairs(ep=arr(E), t=arr(T), obj=arr(OB), old_cell=arr(OLD), new_cell=arr(NEW),
                    steps_since_reobs=arr(S), visible_now=arr(V, bool))

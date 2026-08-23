@@ -1,6 +1,6 @@
 import torch
 
-from hbwm.baselines.lstm import LSTMConfig, LSTMLM
+from hbwm.baselines.lstm import LSTMLM, LSTMConfig
 from hbwm.bdh.core import HBWMConfig, HBWMCore
 from hbwm.instrument.recorder import SigmaRecorder, StateRecorder, make_recorder
 

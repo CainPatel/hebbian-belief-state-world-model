@@ -1,7 +1,5 @@
 """End-to-end on CPU: tiny data -> 3 tiny models -> probes -> decisions. Spec section 7 'smoke'."""
 
-import json
-
 from hbwm.probes.decisions import h1_decision
 from hbwm.probes.evaluate import best_level, load_run
 from hbwm.probes.run import PRESETS, run_probes

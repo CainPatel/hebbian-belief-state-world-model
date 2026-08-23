@@ -45,4 +45,4 @@ class LSTMLM(nn.Module):
 
     def state_vector(self, state):
         h, c = state
-        return torch.cat([torch.cat([h[l], c[l]], dim=1) for l in range(self.cfg.n_layer)], dim=1)
+        return torch.cat([torch.cat([h[i], c[i]], dim=1) for i in range(self.cfg.n_layer)], dim=1)

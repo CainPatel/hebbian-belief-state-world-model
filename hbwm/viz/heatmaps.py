@@ -48,7 +48,8 @@ def render_frames(model: HBWMCore, atlas, data: EpisodeData, episode: int, level
             ax.add_patch(plt.Rectangle((ax_ - 1.5, ay_ - 1.5), 3, 3, fill=False, edgecolor="white", linestyle="--"))
             sss = int(data.steps_since_seen[episode, t, j])
             ax.set_title(f"OBJ_{int(k)}  t={t}  since seen={sss}", fontsize=9)
-            ax.set_xticks([]); ax.set_yticks([])
+            ax.set_xticks([])
+            ax.set_yticks([])
         fig.tight_layout()
         p = out_dir / f"frame_{t:03d}.png"
         fig.savefig(p, dpi=100)

@@ -51,7 +51,10 @@ def aggregate(root, exp, data_dir=None) -> dict:
                 name, r = best_level(by_seed[seed]["probes"], f)
                 if r is None:
                     continue
-                accs.append(r["test_acc"]); levels.append(r["level"]); specs.append(name); cis.append(r["ci95"])
+                accs.append(r["test_acc"])
+                levels.append(r["level"])
+                specs.append(name)
+                cis.append(r["ci95"])
             if accs:
                 table[stem][f] = {"per_seed": accs, "mean": float(np.mean(accs)), "std": float(np.std(accs)),
                                   "levels": levels, "specs": specs, "ci95": cis,

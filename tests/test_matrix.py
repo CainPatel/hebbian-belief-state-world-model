@@ -1,7 +1,18 @@
 import json
 
-from hbwm.matrix import (GAMMA_ARMS, LRS, MODELS, best_lr, e1_jobs, e2_jobs, e3_jobs, headline_runs, is_done,
-                         run_name, run_path, train_cmd)
+from hbwm.matrix import (
+    GAMMA_ARMS,
+    MODELS,
+    best_lr,
+    e1_jobs,
+    e2_jobs,
+    e3_jobs,
+    headline_runs,
+    is_done,
+    run_name,
+    run_path,
+    train_cmd,
+)
 
 
 def _fake_done(root, exp, stem, lr, seed, val):

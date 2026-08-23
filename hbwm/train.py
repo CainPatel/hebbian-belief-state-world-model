@@ -11,7 +11,6 @@ import torch
 from hbwm.config import from_dict, load_config, save_config, to_dict
 from hbwm.device import select_device
 from hbwm.envs.dataset import EpisodeData
-from hbwm.losses import masked_ce
 from hbwm.models import build_model, count_params
 
 
@@ -106,37 +105,36 @@ def train(cfg: TrainConfig) -> dict:
     n_params = count_params(raw_model)
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, betas=(cfg.beta1, cfg.beta2), weight_decay=cfg.weight_decay)
 
-    metrics_f = open(rd / "metrics.jsonl", "w")
-
-    def log(rec):
-        metrics_f.write(json.dumps(rec) + "\n")
-        metrics_f.flush()
-
     best_val, best_step = float("inf"), -1
     t0 = time.time()
     model.train()
-    for step in range(cfg.max_steps + 1):
-        if step % cfg.eval_every == 0 or step == cfg.max_steps:
-            ev = evaluate(model, val_data, cfg, device)
-            log({"step": step, **ev, "elapsed": round(time.time() - t0, 1)})
-            if ev["val_ce"] < best_val:
-                best_val, best_step = ev["val_ce"], step
-                save_checkpoint(rd / "ckpt.pt", raw_model, cfg, step, best_val)
-        if step == cfg.max_steps:
-            break
-        lr = lr_at(step, cfg)
-        for g in opt.param_groups:
-            g["lr"] = lr
-        x, y, m = train_data.get_batch(rng, cfg.batch_size, device)
-        _, loss = model(x, y, loss_mask=m)
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-        if cfg.grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
-        opt.step()
-        if step % cfg.log_every == 0:
-            log({"step": step, "train_loss": loss.item(), "lr": lr, "elapsed": round(time.time() - t0, 1)})
-    metrics_f.close()
+    with open(rd / "metrics.jsonl", "w") as metrics_f:
+
+        def log(rec):
+            metrics_f.write(json.dumps(rec) + "\n")
+            metrics_f.flush()
+
+        for step in range(cfg.max_steps + 1):
+            if step % cfg.eval_every == 0 or step == cfg.max_steps:
+                ev = evaluate(model, val_data, cfg, device)
+                log({"step": step, **ev, "elapsed": round(time.time() - t0, 1)})
+                if ev["val_ce"] < best_val:
+                    best_val, best_step = ev["val_ce"], step
+                    save_checkpoint(rd / "ckpt.pt", raw_model, cfg, step, best_val)
+            if step == cfg.max_steps:
+                break
+            lr = lr_at(step, cfg)
+            for g in opt.param_groups:
+                g["lr"] = lr
+            x, y, m = train_data.get_batch(rng, cfg.batch_size, device)
+            _, loss = model(x, y, loss_mask=m)
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            if cfg.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+            opt.step()
+            if step % cfg.log_every == 0:
+                log({"step": step, "train_loss": loss.item(), "lr": lr, "elapsed": round(time.time() - t0, 1)})
     seconds = time.time() - t0
     final = {
         "best_val_ce": best_val,

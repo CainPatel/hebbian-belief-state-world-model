@@ -4,8 +4,16 @@ import numpy as np
 
 from hbwm.envs.dataset import EpisodeData
 from hbwm.envs.episode import steps_since_seen as _steps_since_seen
-from hbwm.probes.eligibility import (BUCKET_NAMES, PairSet, bucket_of, cell_id, eligible_mask, h3_pairs,
-                                     last_seen_cell, sample_pairs)
+from hbwm.probes.eligibility import (
+    BUCKET_NAMES,
+    PairSet,
+    bucket_of,
+    cell_id,
+    eligible_mask,
+    h3_pairs,
+    last_seen_cell,
+    sample_pairs,
+)
 
 
 def _mk_synthetic(n, n_obj, L, G, visible_spec):

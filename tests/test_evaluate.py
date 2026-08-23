@@ -3,7 +3,7 @@ import json
 import numpy as np
 
 from hbwm.matrix import GAMMA_ARMS, LRS, MODELS, run_path
-from hbwm.probes.evaluate import aggregate, write_outputs
+from hbwm.probes.evaluate import aggregate, best_level, write_outputs
 
 BUCKETS = ["1-4", "5-8", "9-16", "17-32", "33-64", "65+"]
 
@@ -35,6 +35,15 @@ def _fake_run(root, stem, lr, seed, val_ce, probes: dict, h3=None):
     if h3:
         name, arrays = h3
         np.savez(rd / "probes" / f"{name}_h3.npz", **arrays)
+
+
+def test_best_level_breaks_val_ties_by_lowest_level():
+    # equal val accuracy, different levels; the higher level also has the higher test acc, which must not matter
+    lo = {**_probe_json(0.60, 8192, val=0.70), "level": 2}
+    hi = {**_probe_json(0.90, 8192, val=0.70), "level": 5}
+    for probes in ({"sigma_full_L2": lo, "sigma_full_L5": hi}, {"sigma_full_L5": hi, "sigma_full_L2": lo}):
+        name, r = best_level(probes, "sigma_full")
+        assert name == "sigma_full_L2" and r["level"] == 2 and r["test_acc"] == 0.60
 
 
 def test_aggregate_and_write(tmp_path):

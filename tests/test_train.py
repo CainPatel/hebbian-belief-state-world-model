@@ -2,14 +2,20 @@ import json
 import math
 import subprocess
 import sys
-from pathlib import Path
 
-import numpy as np
 import torch
 
 from hbwm.config import save_config
 from hbwm.envs.dataset import EpisodeData
-from hbwm.train import TrainConfig, evaluate, load_checkpoint, lr_at, run_dir, save_checkpoint, train
+from hbwm.train import (
+    TrainConfig,
+    evaluate,
+    load_checkpoint,
+    lr_at,
+    run_dir,
+    save_checkpoint,
+    train,
+)
 
 TINY_BDH = {"n_layer": 2, "n_embd": 16, "n_head": 2, "mlp_internal_dim_multiplier": 8, "vocab_size": 34, "dropout": 0.0, "block_size": 128}
 
@@ -35,8 +41,8 @@ def test_train_overfits_tiny_and_writes_artifacts(tiny_data, tmp_path):
     final = train(cfg)
     rd = run_dir(cfg)
     assert (rd / "config.json").exists() and (rd / "ckpt.pt").exists() and (rd / "final.json").exists()
-    lines = [json.loads(l) for l in (rd / "metrics.jsonl").read_text().splitlines()]
-    train_losses = [l["train_loss"] for l in lines if "train_loss" in l]
+    lines = [json.loads(ln) for ln in (rd / "metrics.jsonl").read_text().splitlines()]
+    train_losses = [rec["train_loss"] for rec in lines if "train_loss" in rec]
     assert train_losses[-1] < 0.8 * train_losses[0]
     assert {"best_val_ce", "best_step", "n_params", "seconds", "lr"} <= set(final)
     assert final["n_params"] == 3 * 2 * 16 * 64 + 2 * 34 * 16

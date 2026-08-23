@@ -1,6 +1,6 @@
 import torch
 
-from hbwm.baselines.lstm import LSTMConfig, LSTMLM
+from hbwm.baselines.lstm import LSTMLM, LSTMConfig
 
 TINY = LSTMConfig(vocab_size=34, n_embd=8, hidden=12, n_layer=2, dropout=0.0)
 
@@ -39,5 +39,5 @@ def test_overfit_tiny_batch():
         opt.zero_grad()
         loss.backward()
         opt.step()
-        losses.append(float(loss))
+        losses.append(loss.item())
     assert losses[-1] < 0.5 * losses[0]

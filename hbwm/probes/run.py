@@ -17,7 +17,13 @@ from hbwm.instrument.atlas import build_atlas, save_atlas
 from hbwm.instrument.features import feature_dim, n_levels, neuron_of_feature
 from hbwm.probes.eligibility import BUCKET_NAMES, PairSet, h3_pairs, sample_pairs
 from hbwm.probes.extract import collect_many, iter_features
-from hbwm.probes.probe import accuracy, bootstrap_ci, majority_chance, predict_proba_stream, train_probes_multi
+from hbwm.probes.probe import (
+    accuracy,
+    bootstrap_ci,
+    majority_chance,
+    predict_proba_stream,
+    train_probes_multi,
+)
 from hbwm.train import load_checkpoint
 
 
@@ -54,8 +60,8 @@ PRESETS = {
 
 
 def spec_name(spec) -> str:
-    f, l = spec
-    return f if l is None else f"{f}_L{l}"
+    f, lvl = spec
+    return f if lvl is None else f"{f}_L{lvl}"
 
 
 def val_best(r: dict) -> float:
@@ -182,7 +188,7 @@ def run_probes(run_dir, data_dir, pcfg: ProbeConfig, device=None) -> dict:
         all_results = {}
         if isinstance(model, HBWMCore):
             levels = list(range(n_levels(model)))
-            specs_small = [(f, l) for f in pcfg.small_features for l in levels]
+            specs_small = [(f, lvl) for f in pcfg.small_features for lvl in levels]
             res_small = fit_and_eval_stage(model, data, pairs, specs_small, pcfg, n_classes, device, out, cache, (),
                                            None, None, chance, ceiling)
             all_results.update(res_small)
@@ -190,13 +196,13 @@ def run_probes(run_dir, data_dir, pcfg: ProbeConfig, device=None) -> dict:
                 if pcfg.full_levels == "all" or (pcfg.full_levels == "auto" and "sigma_rownorm" not in pcfg.small_features):
                     lv = levels
                 elif pcfg.full_levels == "auto":
-                    rn = {l: val_best(res_small[("sigma_rownorm", l)]) for l in levels}
+                    rn = {lvl: val_best(res_small[("sigma_rownorm", lvl)]) for lvl in levels}
                     lv = sorted(set(sorted(rn, key=rn.get, reverse=True)[:2]) | {levels[-1]})
                 else:  # explicit "3,1": de-duplicate and sort so the lowest-level val tie-break holds
                     lv = sorted({int(x) for x in pcfg.full_levels.split(",")})
                     if not set(lv) <= set(levels):
                         raise ValueError(f"full_levels {pcfg.full_levels!r} outside range({len(levels)})")
-                specs_full = [(pcfg.full_feature, l) for l in lv]
+                specs_full = [(pcfg.full_feature, lvl) for lvl in lv]
                 p_tr_full = stratified_subsample(p_tr, pcfg.n_train_full, rng)
                 p_tr_full.save(out / "pairs_train_full.npz")
 

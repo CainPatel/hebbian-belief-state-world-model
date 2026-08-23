@@ -8,11 +8,11 @@ def build_model(kind: str, model_cfg: dict) -> nn.Module:
     if kind == "bdh":
         return HBWMCore(from_dict(HBWMConfig, model_cfg))
     if kind == "lstm":
-        from hbwm.baselines.lstm import LSTMConfig, LSTMLM
+        from hbwm.baselines.lstm import LSTMLM, LSTMConfig
 
         return LSTMLM(from_dict(LSTMConfig, model_cfg))
     if kind == "rwkv":
-        from hbwm.baselines.rwkv import RWKVConfig, RWKVLM
+        from hbwm.baselines.rwkv import RWKVLM, RWKVConfig
 
         return RWKVLM(from_dict(RWKVConfig, model_cfg))
     raise ValueError(f"unknown model kind {kind!r}")

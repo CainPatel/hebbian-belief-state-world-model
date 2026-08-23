@@ -7,8 +7,16 @@ from hbwm.envs.dataset import EpisodeData
 from hbwm.instrument.features import feature_dim
 from hbwm.probes.eligibility import sample_pairs
 from hbwm.probes.extract import collect_many, iter_features
-from hbwm.probes.probe import (LinearProbe, accuracy, bootstrap_ci, feature_stats, majority_chance, predict_proba,
-                               predict_proba_stream, train_probes_multi)
+from hbwm.probes.probe import (
+    LinearProbe,
+    accuracy,
+    bootstrap_ci,
+    feature_stats,
+    majority_chance,
+    predict_proba,
+    predict_proba_stream,
+    train_probes_multi,
+)
 
 CFG = HBWMConfig(n_layer=2, n_embd=16, n_head=2, mlp_internal_dim_multiplier=8, vocab_size=34, dropout=0.0, block_size=128)
 

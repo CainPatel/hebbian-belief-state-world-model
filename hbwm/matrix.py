@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -35,7 +36,7 @@ def best_lr(root, exp, stem) -> float:
         if not f.exists():
             raise FileNotFoundError(f"E1 run missing: {f}")
         v = json.loads(f.read_text())["best_val_ce"]
-        vals[lr] = v if (v is not None and v == v and v != float("inf")) else float("inf")  # NaN/inf = diverged = worst
+        vals[lr] = v if (v is not None and math.isfinite(v)) else float("inf")  # None/NaN/inf = diverged = worst
     return min(vals, key=vals.get)
 
 
@@ -93,7 +94,8 @@ def main():
             _run([sys.executable, "-m", "hbwm.probes.run", "--run-dir", str(rd), "--data", args.data,
                   "--preset", "study1"], args.dry_run)
     else:
-        _run([sys.executable, "-m", "hbwm.probes.evaluate", "--root", root, "--exp", exp], args.dry_run)
+        _run([sys.executable, "-m", "hbwm.probes.evaluate", "--root", root, "--exp", exp,
+              "--data", args.data], args.dry_run)
 
 
 if __name__ == "__main__":

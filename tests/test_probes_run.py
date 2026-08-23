@@ -21,7 +21,7 @@ def _train(tiny_data, tmp_path, model, mcfg, name):
 
 def test_run_probes_bdh_and_lstm(tiny_data, tmp_path):
     rd = _train(tiny_data, tmp_path, "bdh", TINY_BDH, "bdh_tiny")
-    summary = run_probes(rd, tiny_data.out_dir, PRESETS["smoke"], device="cpu")
+    run_probes(rd, tiny_data.out_dir, PRESETS["smoke"], device="cpu")
     out = rd / "probes"
     done = json.loads((out / "done.json").read_text())
     assert {"chance", "ceiling", "n_classes", "specs", "best_full_spec"} <= set(done) and done["n_classes"] == 25

@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from hbwm.baselines.lstm import LSTMConfig, LSTMLM
+from hbwm.baselines.lstm import LSTMLM, LSTMConfig
 from hbwm.bdh.core import HBWMConfig, HBWMCore
 from hbwm.instrument.features import BDH_FEATURES, extract, feature_dim, n_levels, neuron_of_feature
 from hbwm.instrument.recorder import SigmaRecorder, StateRecorder
@@ -17,9 +17,9 @@ def test_dims_and_extract_shapes():
     SigmaRecorder(m).run(torch.randint(0, 34, (3, 5)), [4], lambda p, pl: got.update({n: extract(pl, n, 1) for n in BDH_FEATURES}))
     for n in BDH_FEATURES:
         assert got[n].shape == (3, feature_dim(m, n))
-    l = LSTMLM(LSTMConfig(vocab_size=34, n_embd=8, hidden=12, n_layer=2)).eval()
-    assert feature_dim(l, "state_vec") == 48 and n_levels(l) == 1
-    StateRecorder(l).run(torch.randint(0, 34, (2, 3)), [2], lambda p, pl: got.update({"sv": extract(pl, "state_vec", None)}))
+    lm = LSTMLM(LSTMConfig(vocab_size=34, n_embd=8, hidden=12, n_layer=2)).eval()
+    assert feature_dim(lm, "state_vec") == 48 and n_levels(lm) == 1
+    StateRecorder(lm).run(torch.randint(0, 34, (2, 3)), [2], lambda p, pl: got.update({"sv": extract(pl, "state_vec", None)}))
     assert got["sv"].shape == (2, 48)
 
 

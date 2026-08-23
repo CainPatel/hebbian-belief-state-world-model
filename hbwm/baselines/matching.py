@@ -2,8 +2,8 @@ import argparse
 import dataclasses
 import json
 
-from hbwm.baselines.lstm import LSTMConfig, LSTMLM
-from hbwm.baselines.rwkv import RWKVConfig, RWKVLM
+from hbwm.baselines.lstm import LSTMLM, LSTMConfig
+from hbwm.baselines.rwkv import RWKVLM, RWKVConfig
 from hbwm.models import build_model, count_params
 
 
