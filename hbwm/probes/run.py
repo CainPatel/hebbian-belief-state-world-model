@@ -193,7 +193,11 @@ def run_probes(run_dir, data_dir, pcfg: ProbeConfig, device=None) -> dict:
                                            None, None, chance, ceiling)
             all_results.update(res_small)
             if pcfg.full_feature:
-                if pcfg.full_levels == "all" or (pcfg.full_levels == "auto" and "sigma_rownorm" not in pcfg.small_features):
+                if pcfg.full_levels == "auto" and "sigma_rownorm" not in pcfg.small_features:
+                    # silently probing every level instead would blow the sigma_full budget (~25 GB/level)
+                    raise ValueError("full_levels='auto' requires sigma_rownorm in small_features; "
+                                     "use 'all' or an explicit list")
+                if pcfg.full_levels == "all":
                     lv = levels
                 elif pcfg.full_levels == "auto":
                     rn = {lvl: val_best(res_small[("sigma_rownorm", lvl)]) for lvl in levels}
@@ -214,7 +218,10 @@ def run_probes(run_dir, data_dir, pcfg: ProbeConfig, device=None) -> dict:
                 all_results.update(res_full)
                 summary["best_full_spec"] = spec_name(select_best_full(res_full)[0])
             if pcfg.atlas:
-                save_atlas(build_atlas(model, d_tr, pcfg.atlas_episodes, device=device), out / "atlas.json")
+                try:  # exploratory: an atlas failure must never cost the preregistered probe results
+                    save_atlas(build_atlas(model, d_tr, pcfg.atlas_episodes, device=device), out / "atlas.json")
+                except Exception as e:
+                    summary["atlas_error"] = repr(e)
         else:
             specs = [("state_vec", None)]
             all_results.update(fit_and_eval_stage(model, data, pairs, specs, pcfg, n_classes, device, out, cache, (),

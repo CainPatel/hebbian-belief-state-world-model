@@ -43,3 +43,6 @@ def test_best_lr_and_followups(tmp_path):
     assert len(hl) == 15
     cmd = train_cmd(("lstm", 1e-3, 2), tmp_path)
     assert "--config" in cmd and "experiments/train/lstm.json" in cmd and "--seed" in cmd and "2" in cmd
+    assert "--data-dir" not in cmd  # no data dir given -> train.py falls back to its config
+    cmd = train_cmd(("lstm", 1e-3, 2), tmp_path, data="data/grid9")
+    assert cmd[cmd.index("--data-dir") + 1] == "data/grid9"

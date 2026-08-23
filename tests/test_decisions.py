@@ -45,7 +45,14 @@ def test_h3_no_flip():
 def test_h4():
     r = h4_k90({16: 0.3, 64: 0.5, 256: 0.74, 1024: 0.8}, acc_all=0.8, n_features=524288)
     assert r["k90"] == 256 and r["strong"] and r["weak"]
+    # no listed k reaches 90 % of acc(all): the grid's terminal point ("all", spec 4.5) is k90
     r = h4_k90({16: 0.3, 64: 0.5}, acc_all=0.8, n_features=1000)
-    assert r["k90"] is None and not r["strong"] and not r["weak"]
+    assert r["k90"] == 1000 and r["k90_frac"] == 1.0 and not r["strong"] and not r["weak"]
     r = h4_k90({1024: 0.75}, acc_all=0.8, n_features=50000)
     assert r["k90"] == 1024 and not r["strong"] and not r["weak"]  # 1024 > 1% of 50000
+
+
+def test_h4_accepts_json_string_keys():
+    ints = h4_k90({16: 0.3, 64: 0.5, 256: 0.74, 1024: 0.8}, acc_all=0.8, n_features=524288)
+    strs = h4_k90({"16": 0.3, "64": 0.5, "256": 0.74, "1024": 0.8}, acc_all=0.8, n_features=524288)
+    assert strs == ints and strs["k90"] == 256

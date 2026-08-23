@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from hbwm.probes.eligibility import PairSet
+from hbwm.probes.probe import predict_proba_stream
 from hbwm.probes.run import PRESETS, run_probes, stratified_subsample
 from hbwm.train import TrainConfig, run_dir, train
 
@@ -50,16 +51,45 @@ def test_run_probes_bdh_and_lstm(tiny_data, tmp_path):
 def test_cache_removed_when_a_stage_fails(tiny_data, tmp_path, monkeypatch):
     """The fp16 sigma_full memmaps are ~25 GB per level in Study 1, so they must not survive a crash."""
     rd = _train(tiny_data, tmp_path, "bdh", TINY_BDH, "bdh_fail")
+    cached = {}
+
+    def boom(probes, *args, **kwargs):  # fail inside the sigma_full stage, after its memmaps exist
+        if any(s[0] == "sigma_full" for s in probes):
+            cached["files"] = sorted(p.name for p in (rd / "probes" / "cache").glob("*"))
+            raise RuntimeError("sigma_full stage exploded")
+        return predict_proba_stream(probes, *args, **kwargs)
+
+    monkeypatch.setattr("hbwm.probes.run.predict_proba_stream", boom)
+    with pytest.raises(RuntimeError, match="sigma_full stage exploded"):
+        run_probes(rd, tiny_data.out_dir, PRESETS["smoke"], device="cpu")
+    assert cached["files"]  # the memmaps really were on disk when the stage failed
+    assert (rd / "probes" / "sigma_rownorm_L0.json").exists()  # the small stage had finished
+    assert not (rd / "probes" / "done.json").exists()
+    assert not (rd / "probes" / "cache").exists()
+
+
+def test_atlas_failure_does_not_abort_the_probe_run(tiny_data, tmp_path, monkeypatch):
+    """The atlas is exploratory, so a failure there must not cost the preregistered probe results."""
+    rd = _train(tiny_data, tmp_path, "bdh", TINY_BDH, "bdh_atlas_fail")
 
     def boom(*args, **kwargs):
         raise RuntimeError("atlas exploded")
 
     monkeypatch.setattr("hbwm.probes.run.build_atlas", boom)
-    with pytest.raises(RuntimeError, match="atlas exploded"):
-        run_probes(rd, tiny_data.out_dir, PRESETS["smoke"], device="cpu")
-    # the sigma_full stage finished (so its memmaps really were written to cache/) before the atlas raised
-    assert (rd / "probes" / "sigma_full_L0.json").exists() and not (rd / "probes" / "done.json").exists()
-    assert not (rd / "probes" / "cache").exists()
+    summary = run_probes(rd, tiny_data.out_dir, PRESETS["smoke"], device="cpu")
+    out = rd / "probes"
+    done = json.loads((out / "done.json").read_text())
+    assert "atlas exploded" in done["atlas_error"] and summary["atlas_error"] == done["atlas_error"]
+    assert not (out / "atlas.json").exists()
+    assert (out / "sigma_rownorm_L0.json").exists() and (out / f"{done['best_full_spec']}.json").exists()
+    assert not (out / "cache").exists()
+
+
+def test_auto_full_levels_requires_sigma_rownorm(tiny_data, tmp_path):
+    rd = _train(tiny_data, tmp_path, "bdh", TINY_BDH, "bdh_auto")
+    pcfg = dataclasses.replace(PRESETS["smoke"], small_features=["resid"], full_levels="auto")
+    with pytest.raises(ValueError, match="requires sigma_rownorm"):
+        run_probes(rd, tiny_data.out_dir, pcfg, device="cpu")
 
 
 def test_explicit_full_levels_are_deduped_sorted_and_validated(tiny_data, tmp_path):

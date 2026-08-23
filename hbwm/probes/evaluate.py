@@ -58,6 +58,7 @@ def aggregate(root, exp, data_dir=None) -> dict:
             if accs:
                 table[stem][f] = {"per_seed": accs, "mean": float(np.mean(accs)), "std": float(np.std(accs)),
                                   "levels": levels, "specs": specs, "ci95": cis,
+                                  "n_train": by_seed[0]["probes"][specs[0]].get("n_train"),
                                   "n_features": by_seed[0]["probes"][specs[0]]["n_features"],
                                   "chance": by_seed[0]["probes"][specs[0]]["chance"],
                                   "ceiling": by_seed[0]["probes"][specs[0]]["ceiling"]}
@@ -75,25 +76,39 @@ def aggregate(root, exp, data_dir=None) -> dict:
                 if v is not None:
                     per_bucket[b].append(v)
         mean_b = {b: (float(np.mean(v)) if v else None) for b, v in per_bucket.items()}
-        h2[stem] = {**h2_curve(mean_b), "spec_per_seed": table[stem][f]["specs"]}
+        # every seed probes the same probe_test pairs, so seed 0's chosen spec carries the bucket counts
+        s0 = min(runs[stem])
+        bucket_n = runs[stem][s0]["probes"][table[stem][f]["specs"][0]].get("bucket_n") or {}
+        h2[stem] = {**h2_curve(mean_b), "spec_per_seed": table[stem][f]["specs"], "bucket_n": bucket_n}
     # H3 / H4 on each run's selected spec
     h3, h4 = {}, {}
     for stem in BDH_STEMS + BASELINES:
-        fr, k90s, per_seed_h3, per_seed_h4 = [], [], {}, {}
+        fr, fr_nv, k90s, per_seed_h3, per_seed_h4 = [], [], [], {}, {}
         for seed, run in runs[stem].items():
             for spec, arrs in run["h3"].items():
                 d = h3_latency(arrs["p_old"], arrs["p_new"], arrs["steps_since_reobs"], arrs["ep"])
                 per_seed_h3[seed] = {"spec": spec, **{k: v for k, v in d.items() if k != "latencies"}}
                 fr.append(d["frac_le5"])
+                if "visible_now" in arrs:  # exploratory: same rule, restricted to still-unseen steps
+                    nv = ~np.asarray(arrs["visible_now"], dtype=bool)
+                    e = h3_latency(arrs["p_old"][nv], arrs["p_new"][nv], arrs["steps_since_reobs"][nv], arrs["ep"][nv])
+                    per_seed_h3[seed]["exploratory_not_visible"] = {
+                        k: e[k] for k in ("n_episodes", "n_flipped", "median_latency", "frac_le5")}
+                    fr_nv.append(e["frac_le5"])
+            had_h4 = False
             for spec, r in run["probes"].items():
                 if "h4" in r:
-                    d = h4_k90({int(k): v for k, v in r["h4"]["acc_by_k"].items()}, r["h4"]["acc_all"], r["n_features"])
-                    d["neurons_at_k90"] = (r["h4"]["neurons_by_k"] or {}).get(str(d["k90"])) if d["k90"] else None
+                    had_h4 = True
+                    d = h4_k90(r["h4"]["acc_by_k"], r["h4"]["acc_all"], r["n_features"])
+                    d["neurons_at_k90"] = (r["h4"]["neurons_by_k"] or {}).get(str(d["k90"]))
                     per_seed_h4[seed] = {"spec": spec, "acc_by_k": r["h4"]["acc_by_k"], **d}
-                    k90s.append(d["k90"] if d["k90"] is not None else float("inf"))
+                    k90s.append(d["k90"])
+            if not had_h4:  # a seed with no H4 at all is a seed whose k90 was never reached
+                k90s.append(float("inf"))
         if per_seed_h3:
             m = float(np.mean(fr))
-            h3[stem] = {"per_seed": per_seed_h3, "mean_frac_le5": m, "supported": bool(m >= 0.7)}
+            h3[stem] = {"per_seed": per_seed_h3, "mean_frac_le5": m, "supported": bool(m >= 0.7),
+                        "mean_frac_le5_not_visible": (float(np.mean(fr_nv)) if fr_nv else None)}
         if per_seed_h4:
             med = float(np.median(k90s))
             nf = next(iter(per_seed_h4.values()))
@@ -131,6 +146,11 @@ def _fmt(x, nd=3):
     return "-" if x is None else f"{x:.{nd}f}"
 
 
+def _val(x):
+    """Verbatim cell for a value that is not a fixed-precision float (counts, params, lr)."""
+    return "-" if x is None else str(x)
+
+
 def write_outputs(agg: dict, out_dir) -> None:
     import matplotlib
 
@@ -142,10 +162,12 @@ def write_outputs(agg: dict, out_dir) -> None:
     for k in ("table", "h1", "h2", "h3", "h4", "perplexity"):
         (out / f"{k}.json").write_text(json.dumps(agg[k], indent=2, default=float) + "\n")
     lines = ["## Probe accuracy (test, best level per seed; mean ± std over 3 seeds)", "",
-             "| model | feature | acc | chance | ceiling | #features | levels |", "|---|---|---|---|---|---|---|"]
+             "| model | feature | acc | chance | ceiling | #features | n_train | levels |",
+             "|---|---|---|---|---|---|---|---|"]
     for stem, feats in agg["table"].items():
         for f, r in feats.items():
-            lines.append(f"| {stem} | {f} | {r['mean']:.3f} ± {r['std']:.3f} | {r['chance']:.3f} | {r['ceiling']:.3f} | {r['n_features']} | {r['levels']} |")
+            lines.append(f"| {stem} | {f} | {r['mean']:.3f} ± {r['std']:.3f} | {r['chance']:.3f} | {r['ceiling']:.3f} "
+                         f"| {r['n_features']} | {_val(r.get('n_train'))} | {r['levels']} |")
     h1 = agg["h1"]
     lines += ["", f"## H1 — supported: **{h1['supported']}** (margin {h1['margin']:.2f})", "",
               "| comparator | mean diff | paired diffs | passes |", "|---|---|---|---|"]
@@ -155,16 +177,23 @@ def write_outputs(agg: dict, out_dir) -> None:
               "| model | " + " | ".join(BUCKET_NAMES) + " | graceful |", "|---|" + "---|" * (len(BUCKET_NAMES) + 1)]
     for stem, r in agg["h2"].items():
         lines.append(f"| {stem} | " + " | ".join(_fmt(r["values"].get(b)) for b in BUCKET_NAMES) + f" | {r['graceful']} |")
-    lines += ["", "## H3 — belief revision latency", "", "| model | mean frac(latency ≤ 5) | supported |", "|---|---|---|"]
+    lines += ["", "Test pairs per bucket (probe_test, shared by all seeds):", "",
+              "| model | " + " | ".join(f"n({b})" for b in BUCKET_NAMES) + " |", "|---|" + "---|" * len(BUCKET_NAMES)]
+    for stem, r in agg["h2"].items():
+        lines.append(f"| {stem} | " + " | ".join(_val((r.get("bucket_n") or {}).get(b)) for b in BUCKET_NAMES) + " |")
+    lines += ["", "## H3 — belief revision latency", "",
+              "| model | mean frac(latency ≤ 5) | supported | frac(≤5), not-visible steps only (exploratory) |",
+              "|---|---|---|---|"]
     for stem, r in agg["h3"].items():
-        lines.append(f"| {stem} | {r['mean_frac_le5']:.3f} | {r['supported']} |")
+        lines.append(f"| {stem} | {r['mean_frac_le5']:.3f} | {r['supported']} | {_fmt(r.get('mean_frac_le5_not_visible'))} |")
     lines += ["", "## H4 — sparsity (k90 = min top-k features reaching 90% of full accuracy)", "",
               "| model | median k90 | #features | strong (≤256) | weak (≤1%) |", "|---|---|---|---|---|"]
     for stem, r in agg["h4"].items():
         lines.append(f"| {stem} | {_fmt(r['median_k90'], 0)} | {r['n_features']} | {r['strong']} | {r['weak']} |")
     lines += ["", "## Prediction quality", "", "| model | params | lr | val CE | test CE | test CE (window) |", "|---|---|---|---|---|---|"]
     for stem, r in agg["perplexity"].items():
-        lines.append(f"| {stem} | {r['n_params']} | {r['lr']} | {r['val_ce_mean']:.4f} | {_fmt(r.get('test_ce_mean'), 4)} | {_fmt(r.get('test_ce_window_mean'), 4)} |")
+        lines.append(f"| {stem} | {_val(r['n_params'])} | {_val(r['lr'])} | {r['val_ce_mean']:.4f} | "
+                     f"{_fmt(r.get('test_ce_mean'), 4)} | {_fmt(r.get('test_ce_window_mean'), 4)} |")
     (out / "results.md").write_text("\n".join(lines) + "\n")
 
     fig, ax = plt.subplots(figsize=(7, 4))

@@ -73,6 +73,25 @@ def test_iter_features_covers_every_pair_once_and_stream_matches(tiny_data):
     assert np.allclose(out4[("resid", 0)]["k4"], predict_proba(p4, X[("resid", 0)].astype(np.float32)[:, [3, 0, 9, 1]]), atol=1e-5)
 
 
+def test_standardized_topk_probe_matches_streamed_columns(tiny_data):
+    """The H4 chain: a top-k probe standardizes *its own* column subset, and the streamed column slice
+    must reproduce the direct prediction exactly."""
+    torch.manual_seed(0)
+    m = HBWMCore(CFG).eval()
+    d = EpisodeData(tiny_data.out_dir, "probe_train")
+    pairs = sample_pairs(d, np.random.default_rng(0), per_obj=3)
+    spec = ("resid", 0)
+    X = collect_many(iter_features(m, d, pairs, [spec], batch_eps=4), len(pairs),
+                     {spec: feature_dim(m, spec[0])})[spec].astype(np.float32)
+    cols = np.array([3, 0, 9, 1])
+    pk = train_probes_multi(X[:, cols], pairs.label, 25, [1e-3], epochs=2)[1e-3]
+    out = predict_proba_stream({spec: {"k4": pk}}, iter_features(m, d, pairs, [spec], batch_eps=4),
+                               len(pairs), 25, columns={spec: {"k4": cols}})
+    assert np.allclose(out[spec]["k4"], predict_proba(pk, X[:, cols]), atol=1e-5)
+    mean, std = feature_stats(X[:, cols])
+    assert np.allclose(pk.mean.numpy(), mean) and np.allclose(pk.std.numpy(), std)
+
+
 def test_topk_prefix_accuracy_is_monotone_on_synthetic():
     rng = np.random.default_rng(2)
     n, C = 600, 4

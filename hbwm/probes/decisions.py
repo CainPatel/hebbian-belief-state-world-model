@@ -46,7 +46,11 @@ def h3_latency(p_old, p_new, steps, ep):
 
 
 def h4_k90(acc_by_k, acc_all, n_features):
-    ks = sorted(int(k) for k in acc_by_k)
-    k90 = next((k for k in ks if acc_by_k[k] >= 0.9 * acc_all), None)
-    return {"k90": k90, "k90_frac": (k90 / n_features if k90 else None),
-            "strong": bool(k90 is not None and k90 <= 256), "weak": bool(k90 is not None and k90 <= 0.01 * n_features)}
+    """k90 = min k on the grid with acc ≥ 0.9 · acc(all). The spec 4.5 grid ends in "all", i.e. k =
+    n_features with accuracy acc_all, so that terminal point always qualifies: when no listed k reaches
+    the threshold, k90 = n_features and k90_frac = 1.0 (never None), which is neither strong nor weak
+    for any realistic feature count. `acc_by_k` keys may be ints or JSON string keys."""
+    acc = {int(k): v for k, v in acc_by_k.items()}
+    k90 = next((k for k in sorted(acc) if acc[k] >= 0.9 * acc_all), n_features)
+    return {"k90": k90, "k90_frac": k90 / n_features,
+            "strong": bool(k90 <= 256), "weak": bool(k90 <= 0.01 * n_features)}

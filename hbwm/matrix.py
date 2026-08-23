@@ -54,10 +54,11 @@ def headline_runs(root, exp):
     return jobs + e3_jobs(root, exp)
 
 
-def train_cmd(job, root):
+def train_cmd(job, root, data=None):
     stem, lr, seed = job
-    return [sys.executable, "-m", "hbwm.train", "--config", f"experiments/train/{stem}.json",
-            "--seed", str(seed), "--lr", str(lr), "--out-root", str(root)]
+    cmd = [sys.executable, "-m", "hbwm.train", "--config", f"experiments/train/{stem}.json",
+           "--seed", str(seed), "--lr", str(lr), "--out-root", str(root)]
+    return cmd + (["--data-dir", str(data)] if data is not None else [])
 
 
 def _run(cmd, dry):
@@ -81,7 +82,7 @@ def main():
             if is_done(run_path(root, exp, *job)):
                 print(f"skip (done): {job}")
                 continue
-            _run(train_cmd(job, root), args.dry_run)
+            _run(train_cmd(job, root, args.data), args.dry_run)
         if args.phase != "e1":
             (Path(root) / exp / "best_lr.json").write_text(
                 json.dumps({stem: best_lr(root, exp, stem) for stem in MODELS}, indent=2) + "\n")
