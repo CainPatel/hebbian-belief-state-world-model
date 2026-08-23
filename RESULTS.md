@@ -86,7 +86,7 @@ pinned to `"device": "mps"` for the Phase 5 matrix.
 
 ## Preregistration
 
-Decision rules: see README.md. Preregistration commit: `<hash filled in Step 4>`.
+Decision rules: see README.md. Preregistration commit: `e674b1da138f905670dde5571e1a1890b134fe36`.
 
 ## Study 1 headline (filled by Task 34)
 
