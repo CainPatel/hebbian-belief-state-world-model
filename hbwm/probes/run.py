@@ -77,7 +77,7 @@ def stratified_subsample(pairs: PairSet, n_max: int, rng) -> PairSet:
 def gather_columns(X, cols, chunk=2048) -> np.ndarray:
     out = np.empty((X.shape[0], len(cols)), dtype=np.float32)
     for b0 in range(0, X.shape[0], chunk):
-        out[b0 : b0 + chunk] = np.asarray(X[b0 : b0 + chunk], dtype=np.float32)[:, cols]
+        out[b0 : b0 + chunk] = np.asarray(X[b0 : b0 + chunk][:, cols], dtype=np.float32)
     return out
 
 
@@ -136,8 +136,11 @@ def fit_and_eval_stage(model, data, pairs, specs, pcfg, n_classes, device, out_d
         if s in h4_rank:
             rank, ks = h4_rank[s]
             is_neuron_feature = isinstance(model, HBWMCore) and s[0] in ("sigma_full", "sigma_rownorm", "x_sparse")
+            # "l2" is the full-feature best_l2 that every top-k probe was retrained with; L2 is *not*
+            # re-selected per k, so acc_by_k isolates the effect of the feature budget alone.
             r["h4"] = {
                 "ks": ks,
+                "l2": best[s],
                 "acc_by_k": {str(k): accuracy(test[s][f"k{k}"], p_te.label) for k in ks},
                 "acc_all": r["test_acc"],
                 "neurons_by_k": ({str(k): int(len(np.unique(neuron_of_feature(model.hcfg, s[0], rank[:k])))) for k in ks}
@@ -161,52 +164,57 @@ def run_probes(run_dir, data_dir, pcfg: ProbeConfig, device=None) -> dict:
     out = run_dir / "probes"
     out.mkdir(parents=True, exist_ok=True)
     cache = out / "cache"
-    device = select_device(device)
-    t0 = time.time()
-    model, tcfg, meta = load_checkpoint(run_dir / "ckpt.pt", device)
-    d_tr, d_va, d_te = (EpisodeData(data_dir, s) for s in ("probe_train", "probe_val", "probe_test"))
-    rng = np.random.default_rng(pcfg.seed)
-    p_tr, p_va, p_te = (sample_pairs(d, rng, pcfg.per_obj) for d in (d_tr, d_va, d_te))
-    for name, p in (("train", p_tr), ("val", p_va), ("test", p_te)):
-        p.save(out / f"pairs_{name}.npz")
-    n_classes = d_tr.G * d_tr.G
-    chance = majority_chance(p_tr.label, p_te.label)
-    ceiling = float((p_te.oracle == p_te.label).mean())
-    h3p = h3_pairs(d_te)
-    summary = {"chance": chance, "ceiling": ceiling, "n_classes": n_classes, "n_h3": int(len(h3p)), "specs": []}
-    data, pairs = (d_tr, d_va, d_te), (p_tr, p_va, p_te)
-    all_results = {}
-    if isinstance(model, HBWMCore):
-        levels = list(range(n_levels(model)))
-        specs_small = [(f, l) for f in pcfg.small_features for l in levels]
-        res_small = fit_and_eval_stage(model, data, pairs, specs_small, pcfg, n_classes, device, out, cache, (),
-                                       None, None, chance, ceiling)
-        all_results.update(res_small)
-        if pcfg.full_feature:
-            if pcfg.full_levels == "all" or (pcfg.full_levels == "auto" and "sigma_rownorm" not in pcfg.small_features):
-                lv = levels
-            elif pcfg.full_levels == "auto":
-                rn = {l: val_best(res_small[("sigma_rownorm", l)]) for l in levels}
-                lv = sorted(set(sorted(rn, key=rn.get, reverse=True)[:2]) | {levels[-1]})
-            else:
-                lv = [int(x) for x in pcfg.full_levels.split(",")]
-            specs_full = [(pcfg.full_feature, l) for l in lv]
-            p_tr_full = stratified_subsample(p_tr, pcfg.n_train_full, rng)
+    try:
+        device = select_device(device)
+        t0 = time.time()
+        model, tcfg, meta = load_checkpoint(run_dir / "ckpt.pt", device)
+        d_tr, d_va, d_te = (EpisodeData(data_dir, s) for s in ("probe_train", "probe_val", "probe_test"))
+        rng = np.random.default_rng(pcfg.seed)
+        p_tr, p_va, p_te = (sample_pairs(d, rng, pcfg.per_obj) for d in (d_tr, d_va, d_te))
+        for name, p in (("train", p_tr), ("val", p_va), ("test", p_te)):
+            p.save(out / f"pairs_{name}.npz")
+        n_classes = d_tr.G * d_tr.G
+        chance = majority_chance(p_tr.label, p_te.label)
+        ceiling = float((p_te.oracle == p_te.label).mean())
+        h3p = h3_pairs(d_te)
+        summary = {"chance": chance, "ceiling": ceiling, "n_classes": n_classes, "n_h3": int(len(h3p)), "specs": []}
+        data, pairs = (d_tr, d_va, d_te), (p_tr, p_va, p_te)
+        all_results = {}
+        if isinstance(model, HBWMCore):
+            levels = list(range(n_levels(model)))
+            specs_small = [(f, l) for f in pcfg.small_features for l in levels]
+            res_small = fit_and_eval_stage(model, data, pairs, specs_small, pcfg, n_classes, device, out, cache, (),
+                                           None, None, chance, ceiling)
+            all_results.update(res_small)
+            if pcfg.full_feature:
+                if pcfg.full_levels == "all" or (pcfg.full_levels == "auto" and "sigma_rownorm" not in pcfg.small_features):
+                    lv = levels
+                elif pcfg.full_levels == "auto":
+                    rn = {l: val_best(res_small[("sigma_rownorm", l)]) for l in levels}
+                    lv = sorted(set(sorted(rn, key=rn.get, reverse=True)[:2]) | {levels[-1]})
+                else:  # explicit "3,1": de-duplicate and sort so the lowest-level val tie-break holds
+                    lv = sorted({int(x) for x in pcfg.full_levels.split(",")})
+                    if not set(lv) <= set(levels):
+                        raise ValueError(f"full_levels {pcfg.full_levels!r} outside range({len(levels)})")
+                specs_full = [(pcfg.full_feature, l) for l in lv]
+                p_tr_full = stratified_subsample(p_tr, pcfg.n_train_full, rng)
+                p_tr_full.save(out / "pairs_train_full.npz")
 
-            def select_best_full(results):
-                return [max(specs_full, key=lambda s: val_best(results[s]))]
+                def select_best_full(results):
+                    return [max(specs_full, key=lambda s: val_best(results[s]))]
 
-            res_full = fit_and_eval_stage(model, data, (p_tr_full, p_va, p_te), specs_full, pcfg, n_classes, device,
-                                          out, cache, tuple(specs_full), select_best_full, h3p, chance, ceiling)
-            all_results.update(res_full)
-            summary["best_full_spec"] = spec_name(select_best_full(res_full)[0])
-        if pcfg.atlas:
-            save_atlas(build_atlas(model, d_tr, pcfg.atlas_episodes, device=device), out / "atlas.json")
-    else:
-        specs = [("state_vec", None)]
-        all_results.update(fit_and_eval_stage(model, data, pairs, specs, pcfg, n_classes, device, out, cache, (),
-                                              lambda r: specs, h3p, chance, ceiling))
-    shutil.rmtree(cache, ignore_errors=True)
+                res_full = fit_and_eval_stage(model, data, (p_tr_full, p_va, p_te), specs_full, pcfg, n_classes, device,
+                                              out, cache, tuple(specs_full), select_best_full, h3p, chance, ceiling)
+                all_results.update(res_full)
+                summary["best_full_spec"] = spec_name(select_best_full(res_full)[0])
+            if pcfg.atlas:
+                save_atlas(build_atlas(model, d_tr, pcfg.atlas_episodes, device=device), out / "atlas.json")
+        else:
+            specs = [("state_vec", None)]
+            all_results.update(fit_and_eval_stage(model, data, pairs, specs, pcfg, n_classes, device, out, cache, (),
+                                                  lambda r: specs, h3p, chance, ceiling))
+    finally:  # the fp16 sigma_full memmaps are ~25 GB per level in Study 1 and must not survive a failure
+        shutil.rmtree(cache, ignore_errors=True)
     summary["specs"] = sorted(spec_name(s) for s in all_results)
     summary["elapsed_s"] = round(time.time() - t0, 1)
     summary["probe_cfg"] = to_dict(pcfg)
