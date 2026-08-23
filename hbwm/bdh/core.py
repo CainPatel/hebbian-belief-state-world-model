@@ -165,3 +165,10 @@ class HBWMCore(BDH):
             "yKV": torch.stack(ykv_list),
         }
         return logits, state, internals
+
+    # ---- n x n synapse view (lazy) -------------------------------------------
+    def synapse(self, sigma_level, level: int, head: int, rows, cols):
+        """sigma_level: [B,nh,N,D] (one level). Returns [B, len(rows), len(cols)]
+        = sigma[:, head, rows, :] @ encoder_v[head][:, cols]  (never materialises N x N)."""
+        _, enc_v, _ = self.level_params(level)
+        return sigma_level[:, head][:, rows, :] @ enc_v[head][:, cols]
