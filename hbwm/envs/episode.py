@@ -56,6 +56,7 @@ def run_episode(cfg: GridConfig, seed: int) -> Episode:
     probs /= probs.sum()
     pidx = int(rng_e.choice(len(names), p=probs))
     policy = make_policy(names[pidx], rng_p)
+    policy_idx = POLICY_NAMES.index(names[pidx])
 
     L, n = cfg.episode_len, cfg.n_objects
     do_move = bool(rng_e.random() < cfg.p_move)
@@ -104,5 +105,5 @@ def run_episode(cfg: GridConfig, seed: int) -> Episode:
     return Episode(
         actions=actions, agent_pos=agent_pos, obj_pos=obj_pos, obj_type=world.obj_type.copy(),
         windows=windows, visible=visible, moved=moved, move_t=t_m if moved else -1, move_obj=move_obj,
-        move_from=move_from, move_to=move_to, reobserved_t=reobserved_t, policy=pidx, seed=seed,
+        move_from=move_from, move_to=move_to, reobserved_t=reobserved_t, policy=policy_idx, seed=seed,
     )

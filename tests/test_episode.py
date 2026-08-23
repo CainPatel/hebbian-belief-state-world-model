@@ -58,3 +58,11 @@ def test_steps_since_seen_and_stale_hand_example():
     assert st[:, 1].tolist() == [False, False, True, False, False, False]
     EP.reobserved_t = -1
     assert stale_mask(EP)[:, 1].tolist() == [False, False, True, True, True, True]
+
+
+def test_policy_index_is_into_policy_names_not_filtered_mix():
+    cfg = GridConfig(policy_mix={"sweep": 1.0}, episode_len=10)
+    assert run_episode(cfg, 3).policy == POLICY_NAMES.index("sweep")
+
+    cfg = GridConfig(policy_mix={"waypoint": 1.0}, episode_len=10)
+    assert run_episode(cfg, 3).policy == POLICY_NAMES.index("waypoint")
