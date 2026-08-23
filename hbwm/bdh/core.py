@@ -105,3 +105,49 @@ class HBWMCore(BDH):
         if return_internals:
             return logits, loss, {"x_sparse": torch.stack(xs_list), "resid": torch.stack(resid_list)}
         return logits, loss
+
+    # ---- recurrent path (inference / instrumentation / Study 2) ---------------
+    def init_state(self, batch_size: int, device=None) -> BDHState:
+        C = self.hcfg
+        dev = device if device is not None else self.lm_head.device
+        sigma = torch.zeros(
+            (C.n_layer, batch_size, C.n_head, C.n_neurons, C.n_embd), device=dev, dtype=torch.float32
+        )
+        return BDHState(sigma=sigma, t=0)
+
+    def step(self, tok, state: BDHState, plasticity: str = "full", plasticity_scale: float = 1.0):
+        """One token for the whole batch. Mutates state.sigma in place; returns (logits, state, internals)."""
+        C = self.hcfg
+        B = tok.size(0)
+        nh, N = C.n_head, C.n_neurons
+        alpha = {"full": 1.0, "frozen": 0.0, "scaled": float(plasticity_scale)}[plasticity]
+        gamma = C.decay_gamma
+        phases = (float(state.t) * self.attn.freqs).view(1, 1, -1)  # [1,1,N]
+        x = self.ln(self.embed(tok))  # B,D
+        sigma = state.sigma
+        xs_list, resid_list, ykv_list = [], [], []
+        for level in range(C.n_layer):
+            enc, enc_v, dec = self.level_params(level)
+            x_sparse = F.relu(torch.einsum("bd,hdn->bhn", x, enc))  # B,nh,N
+            q = Attention.rope(phases, x_sparse)  # k == q
+            yKV = torch.einsum("bhn,bhnd->bhd", q, sigma[level])  # read: s < t only
+            if alpha != 0.0:  # write
+                if gamma != 1.0:
+                    sigma[level].mul_(gamma)
+                sigma[level].add_(torch.einsum("bhn,bd->bhnd", q, x), alpha=alpha)
+            xs_list.append(x_sparse)
+            resid_list.append(x)
+            ykv_list.append(yKV)
+            yKV = self.ln(yKV)
+            y_sparse = F.relu(torch.einsum("bhd,hdn->bhn", yKV, enc_v))
+            xy = self.drop(x_sparse * y_sparse)
+            yMLP = xy.reshape(B, nh * N) @ dec  # B,D
+            x = self.ln(x + self.ln(yMLP))
+        logits = x @ self.lm_head
+        state.t += 1
+        internals = {
+            "x_sparse": torch.stack(xs_list),
+            "resid": torch.stack(resid_list),
+            "yKV": torch.stack(ykv_list),
+        }
+        return logits, state, internals
