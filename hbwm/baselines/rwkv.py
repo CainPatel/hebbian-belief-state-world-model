@@ -44,7 +44,38 @@ def wkv_sequential(w, u, k, v):
 
 
 def wkv_chunked(w, u, k, v, chunk: int = 64):
-    raise NotImplementedError("Task 17")
+    """Chunk-parallel WKV with per-position log-space normalisation; exact match to wkv_sequential.
+    Within a chunk: weights e^{(t-1-s)w + k_s} for s<t, carried state for s<t0, bonus e^{u+k_t} for s=t."""
+    B, T, C = k.shape
+    aa = torch.zeros(B, C, dtype=k.dtype, device=k.device)
+    bb = torch.zeros_like(aa)
+    pp = torch.full_like(aa, float("-inf"))
+    outs = []
+    for t0 in range(0, T, chunk):
+        kc, vc = k[:, t0 : t0 + chunk], v[:, t0 : t0 + chunk]
+        c = kc.size(1)
+        i = torch.arange(c, device=k.device)
+        d = i[:, None] - i[None, :] - 1  # t-1-s
+        valid = d >= 0
+        Lw = d.clamp(min=0).to(k.dtype)[None, :, :, None] * w[None, None, None, :] + kc[:, None, :, :]
+        Lw = Lw.masked_fill(~valid[None, :, :, None], float("-inf"))  # [B,c,c,C] (t, s)
+        Lc = i.to(k.dtype)[None, :, None] * w[None, None, :] + pp[:, None, :]  # [B,c,C] carried
+        Lb = u[None, None, :] + kc  # [B,c,C] bonus (s = t)
+        ref = torch.maximum(torch.maximum(Lw.amax(dim=2), Lc), Lb)  # [B,c,C], always finite
+        Wt = torch.exp(Lw - ref[:, :, None, :])
+        ec, eb = torch.exp(Lc - ref), torch.exp(Lb - ref)
+        num = torch.einsum("btsc,bsc->btc", Wt, vc) + ec * aa[:, None, :] + eb * vc
+        den = Wt.sum(dim=2) + ec * bb[:, None, :] + eb
+        outs.append(num / den)
+        # carry: state at end of chunk = sum_{s<t0+c} e^{(t0+c-1-s)w + k_s} [v_s, 1]
+        Ls = (c - 1 - i).to(k.dtype)[None, :, None] * w[None, None, :] + kc  # [B,c,C]
+        ref2 = torch.maximum(pp + c * w, Ls.amax(dim=1))  # [B,C]
+        e_old = torch.exp(pp + c * w - ref2)
+        Es = torch.exp(Ls - ref2[:, None, :])
+        aa = e_old * aa + (Es * vc).sum(dim=1)
+        bb = e_old * bb + Es.sum(dim=1)
+        pp = ref2
+    return torch.cat(outs, dim=1)
 
 
 def _shift(x):
@@ -84,7 +115,7 @@ class TimeMix(nn.Module):
 
     def forward(self, x):
         k, v, r = self._kvr(x, _shift(x))
-        wkv = wkv_sequential(-torch.exp(self.time_decay), self.time_first, k, v)  # replaced in Task 17
+        wkv = wkv_chunked(-torch.exp(self.time_decay), self.time_first, k, v, self.chunk)
         return self.output(r * wkv)
 
     def step(self, x_t, st):
