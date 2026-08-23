@@ -1,0 +1,15 @@
+{
+  "grid": {
+    "size": 9,
+    "n_objects": 3,
+    "n_object_types": 4,
+    "episode_len": 96,
+    "p_move": 0.5,
+    "move_lo": 0.25,
+    "move_hi": 0.75,
+    "policy_mix": {"random_walk": 0.3334, "sweep": 0.3333, "waypoint": 0.3333}
+  },
+  "splits": {"model_train": 20000, "model_val": 1000, "probe_train": 3000, "probe_val": 1000, "probe_test": 2000},
+  "seed_base": 0,
+  "out_dir": "data/grid9"
+}
