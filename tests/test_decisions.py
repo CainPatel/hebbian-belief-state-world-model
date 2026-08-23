@@ -32,6 +32,16 @@ def test_h3():
     assert abs(r["frac_le5"] - 2 / 3) < 1e-9 and not r["supported"]
 
 
+def test_h3_no_flip():
+    ep = np.array([0, 0, 1, 1])
+    steps = np.array([0, 1, 0, 1])
+    p_old = np.array([0.9, 0.9, 0.9, 0.9])
+    p_new = np.array([0.1, 0.1, 0.1, 0.1])
+    r = h3_latency(p_old, p_new, steps, ep)
+    assert r["n_episodes"] == 2 and r["n_flipped"] == 0 and r["latencies"] == []
+    assert r["median_latency"] is None and r["frac_le5"] == 0.0 and r["supported"] is False
+
+
 def test_h4():
     r = h4_k90({16: 0.3, 64: 0.5, 256: 0.74, 1024: 0.8}, acc_all=0.8, n_features=524288)
     assert r["k90"] == 256 and r["strong"] and r["weak"]
