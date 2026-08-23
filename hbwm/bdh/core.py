@@ -115,11 +115,24 @@ class HBWMCore(BDH):
         )
         return BDHState(sigma=sigma, t=0)
 
+    @torch.no_grad()
     def step(self, tok, state: BDHState, plasticity: str = "full", plasticity_scale: float = 1.0):
-        """One token for the whole batch. Mutates state.sigma in place; returns (logits, state, internals)."""
+        """One token for the whole batch. Mutates state.sigma in place; returns (logits, state, internals).
+
+        Runs under torch.no_grad(): this recurrent path is for inference / instrumentation / Study 2
+        rollouts, not training (training uses the parallel forward).
+
+        plasticity gates the sigma update, not alpha: "frozen" halts decay as well as writes (sigma
+        stays bit-identical to its value on entry); "full"/"scaled" decay sigma by gamma then add
+        alpha * k⊗x (alpha == 0.0 under "scaled" still applies the decay, it just skips the write).
+        """
         C = self.hcfg
         B = tok.size(0)
         nh, N = C.n_head, C.n_neurons
+        if plasticity not in ("full", "frozen", "scaled"):
+            raise ValueError(
+                f"invalid plasticity {plasticity!r}; expected one of 'full', 'frozen', 'scaled'"
+            )
         alpha = {"full": 1.0, "frozen": 0.0, "scaled": float(plasticity_scale)}[plasticity]
         gamma = C.decay_gamma
         phases = (float(state.t) * self.attn.freqs).view(1, 1, -1)  # [1,1,N]
@@ -131,10 +144,11 @@ class HBWMCore(BDH):
             x_sparse = F.relu(torch.einsum("bd,hdn->bhn", x, enc))  # B,nh,N
             q = Attention.rope(phases, x_sparse)  # k == q
             yKV = torch.einsum("bhn,bhnd->bhd", q, sigma[level])  # read: s < t only
-            if alpha != 0.0:  # write
+            if plasticity != "frozen":  # decay + write; frozen holds the belief exactly
                 if gamma != 1.0:
                     sigma[level].mul_(gamma)
-                sigma[level].add_(torch.einsum("bhn,bd->bhnd", q, x), alpha=alpha)
+                if alpha != 0.0:
+                    sigma[level].add_(torch.einsum("bhn,bd->bhnd", q, x), alpha=alpha)
             xs_list.append(x_sparse)
             resid_list.append(x)
             ykv_list.append(yKV)

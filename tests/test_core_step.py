@@ -66,6 +66,49 @@ def test_plasticity_modes():
         assert torch.allclose(s_scaled.sigma - base.sigma, 0.25 * (s_full.sigma - base.sigma), atol=1e-6)
 
 
+def test_plasticity_modes_gamma_0_9():
+    """Finding 1 (review round 1): decay is gated by plasticity MODE, not by alpha. "frozen" halts
+    decay as well as writes (sigma bit-identical to its value on entry); "full"/"scaled" (any scale,
+    including 0.0) decay sigma by gamma then add alpha * k tensor-product x. At gamma=1 the two conventions
+    coincide, so this needs gamma<1 to discriminate (see test_plasticity_modes above for gamma=1)."""
+    torch.manual_seed(4)
+    gamma = 0.9
+    core = HBWMCore(HBWMConfig(**{**TINY, "decay_gamma": gamma})).eval()
+    idx = torch.randint(0, 10, (2, 6))
+    _, base, _ = _rollout(core, idx)  # warm sigma with a few full steps
+    next_tok = idx[:, 0]
+
+    # (a) frozen: sigma left bit-identical (no decay, no write; the belief is held)
+    st_frozen = base.clone()
+    core.step(next_tok, st_frozen, plasticity="frozen")
+    assert torch.equal(st_frozen.sigma, base.sigma)
+
+    # (b) scaled vs full: decay applies to both; write terms scale by alpha
+    st_full = base.clone()
+    core.step(next_tok, st_full, plasticity="full")
+    st_scaled = base.clone()
+    core.step(next_tok, st_scaled, plasticity="scaled", plasticity_scale=0.25)
+    assert torch.allclose(
+        st_scaled.sigma - gamma * base.sigma,
+        0.25 * (st_full.sigma - gamma * base.sigma),
+        atol=1e-6,
+    )
+
+    # (c) scaled with scale=0.0: decay applied, write skipped
+    st_scaled0 = base.clone()
+    core.step(next_tok, st_scaled0, plasticity="scaled", plasticity_scale=0.0)
+    assert torch.allclose(st_scaled0.sigma, gamma * base.sigma, atol=1e-6)
+
+
+def test_step_invalid_plasticity_raises():
+    core = HBWMCore(HBWMConfig(**TINY)).eval()
+    state = core.init_state(2)
+    with pytest.raises(ValueError) as exc:
+        core.step(torch.tensor([1, 2]), state, plasticity="bogus")
+    msg = str(exc.value)
+    assert "full" in msg and "frozen" in msg and "scaled" in msg
+
+
 def test_step_internals_shapes():
     core = HBWMCore(HBWMConfig(**TINY)).eval()
     state = core.init_state(3)
