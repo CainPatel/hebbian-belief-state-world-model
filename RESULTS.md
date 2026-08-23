@@ -56,3 +56,30 @@ uv run python -c "from hbwm.envs.dataset import EpisodeData as E; d=E('data/grid
 Projected 4000-step wall-clock at this measured rate: 4000 / 0.269 ≈ **14,870 s (≈ 4.13 h)** per seed (equivalently 1115.1 s × 4000/300 ≈ 14,868 s).
 
 **Throttling caveat:** this calibration was measured while the machine was in a reduced-power "dark wake" state (lid closed, GPU running at roughly 50-70% of normal speed), plus the first step of the fresh process pays a one-time multi-minute MPS warm-up. Awake, un-throttled MPS throughput is expected to be materially higher than 0.269 steps/sec, so the projected 4000-step figure above is a conservative upper bound, not a clean-hardware benchmark.
+
+### Baselines — LSTM / RWKV (param-matched, both devices)
+
+Param-matching solve (`uv run python -m hbwm.baselines.matching`, target = bdh_g100's 1,577,216 params):
+`lstm_hidden: 350` → 1,579,310 params (+0.13%); `rwkv_width: 176` → 1,631,168 params (+3.42%). Both
+within the ±5% fairness-protocol tolerance; configs preregistered at `experiments/train/lstm.json`
+and `experiments/train/rwkv.json` (same hyper-parameters as `bdh_g100.json`).
+
+Each baseline was calibrated for 300 steps on both MPS and CPU (`--out-root runs_calib` for MPS,
+`runs_calib_cpu` for CPU), machine in the same dark-wake throttled state as the BDH calibration above:
+
+| model | device | n_params | val_ce @ step 0 | val_ce @ step 300 | seconds (300 steps) | steps_per_sec |
+|---|---|---|---|---|---|---|
+| lstm | mps | 1,579,310 | 3.5009 | 0.2964 | 49.0 | 6.123 |
+| lstm | cpu | 1,579,310 | 3.5009 | 0.2994 | 616.1 | 0.487 |
+| rwkv | mps | 1,631,168 | 3.8017 | 0.1172 | 672.2 | 0.446 |
+| rwkv | cpu | 1,631,168 | 3.8017 | 0.1120 | 1831.1 | 0.164 |
+
+Both baselines' `val_ce` fell from close to the ln(34) ≈ 3.526 uniform-prior bound at step 0 to well
+under 1.0 by step 300 on every device, confirming both architectures learn on `data/grid9` as
+expected regardless of device. Full per-eval curves in
+`runs_calib{,_cpu}/study1/{lstm,rwkv}_lr0.001/seed0/metrics.jsonl`.
+
+**Device decision:** MPS is faster than CPU for both baselines (LSTM: 6.123 vs 0.487 steps/s, a
+~12.6x speedup; RWKV: 0.446 vs 0.164 steps/s, a ~2.7x speedup) — neither is a tie, so per the
+higher-steps_per_sec rule both `experiments/train/lstm.json` and `experiments/train/rwkv.json` are
+pinned to `"device": "mps"` for the Phase 5 matrix.

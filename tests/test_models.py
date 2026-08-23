@@ -14,3 +14,10 @@ def test_build_bdh_and_count():
 def test_unknown_kind():
     with pytest.raises(ValueError):
         build_model("nope", {})
+
+
+def test_build_lstm_and_rwkv():
+    l = build_model("lstm", {"vocab_size": 34, "n_embd": 8, "hidden": 12, "n_layer": 2})
+    r = build_model("rwkv", {"vocab_size": 34, "n_embd": 16, "n_layer": 2, "chunk_size": 5})
+    x = torch.randint(0, 34, (2, 10))
+    assert l(x)[0].shape == (2, 10, 34) and r(x)[0].shape == (2, 10, 34)

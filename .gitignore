@@ -1,6 +1,7 @@
 /data/
 /runs/
 runs_calib/
+runs_calib_cpu/
 .venv/
 __pycache__/
 *.pyc
