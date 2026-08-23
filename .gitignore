@@ -1,5 +1,6 @@
-data/
-runs/
+/data/
+/runs/
+runs_calib/
 .venv/
 __pycache__/
 *.pyc

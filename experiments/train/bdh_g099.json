@@ -1,0 +1,8 @@
+{
+  "model": "bdh",
+  "model_cfg": {"n_layer": 6, "n_embd": 64, "n_head": 4, "mlp_internal_dim_multiplier": 128, "vocab_size": 34,
+                "dropout": 0.1, "decay_gamma": 0.99, "share_layers": true, "block_size": 1164},
+  "data_dir": "data/grid9", "exp": "study1",
+  "batch_size": 32, "max_steps": 4000, "lr": 0.001, "min_lr_ratio": 0.1, "weight_decay": 0.1,
+  "beta1": 0.9, "beta2": 0.95, "warmup_steps": 200, "grad_clip": 1.0, "eval_every": 200, "eval_episodes": 256
+}

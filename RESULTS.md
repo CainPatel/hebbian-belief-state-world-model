@@ -42,3 +42,17 @@ uv run python -c "from hbwm.envs.dataset import EpisodeData as E; d=E('data/grid
 - Fraction of episodes with an object moved: **0.5205** (expected ~0.45-0.5)
 - Fraction of episodes where the moved object is re-observed before the episode ends: **0.311** (expected ~0.3-0.45)
 - Fraction of (t, obj) pairs where the object is visible: **0.0975** (expected ~0.1-0.2)
+
+## Calibration
+
+`uv run python -m hbwm.train --config experiments/train/bdh_g100.json --seed 0 --max-steps 300 --out-root runs_calib` (γ = 1.0 preregistered config, real `data/grid9` data, MPS). No `PYTORCH_ENABLE_MPS_FALLBACK` was needed — the run completed cleanly on plain MPS.
+
+| n_params | device | val_ce @ step 0 | val_ce @ step 300 | seconds (300 steps) | steps_per_sec |
+|---|---|---|---|---|---|
+| 1,577,216 | mps | 3.7228 | 0.1953 | 1115.1 | 0.269 |
+
+`val_ce` at step 0 (3.7228) is close to the ln(34) ≈ 3.526 uniform-prior bound and fell monotonically to 0.1953 by step 300 (well under the < 1.0 bar), confirming the observation tokens are highly predictable as expected. Full per-eval and per-20-step curve in `runs_calib/study1/bdh_g100_lr0.001/seed0/metrics.jsonl`.
+
+Projected 4000-step wall-clock at this measured rate: 4000 / 0.269 ≈ **14,870 s (≈ 4.13 h)** per seed (equivalently 1115.1 s × 4000/300 ≈ 14,868 s).
+
+**Throttling caveat:** this calibration was measured while the machine was in a reduced-power "dark wake" state (lid closed, GPU running at roughly 50-70% of normal speed), plus the first step of the fresh process pays a one-time multi-minute MPS warm-up. Awake, un-throttled MPS throughput is expected to be materially higher than 0.269 steps/sec, so the projected 4000-step figure above is a conservative upper bound, not a clean-hardware benchmark.
