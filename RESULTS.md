@@ -83,3 +83,13 @@ expected regardless of device. Full per-eval curves in
 ~12.6x speedup; RWKV: 0.446 vs 0.164 steps/s, a ~2.7x speedup) — neither is a tie, so per the
 higher-steps_per_sec rule both `experiments/train/lstm.json` and `experiments/train/rwkv.json` are
 pinned to `"device": "mps"` for the Phase 5 matrix.
+
+## Preregistration
+
+Decision rules: see README.md. Preregistration commit: `<hash filled in Step 4>`.
+
+## Study 1 headline (filled by Task 34)
+
+- Best LRs: (from runs/study1/best_lr.json)
+- Probe accuracy table, H1–H4 decisions, prediction-quality table: copied from runs/study1/results/results.md
+- Figures: runs/study1/results/h2_curves.png, h4_curves.png; heatmap frames under runs/study1/<run>/viz/
