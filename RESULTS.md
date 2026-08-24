@@ -93,3 +93,25 @@ Decision rules: see README.md. Preregistration commit: `e674b1da138f905670dde557
 - Best LRs: (from runs/study1/best_lr.json)
 - Probe accuracy table, H1–H4 decisions, prediction-quality table: copied from runs/study1/results/results.md
 - Figures: runs/study1/results/h2_curves.png, h4_curves.png; heatmap frames under runs/study1/<run>/viz/
+
+## E1 — LR sweep (seed 0)
+
+Source: `runs/study1/{bdh_g100,lstm,rwkv}_lr{0.0003,0.001,0.003}/seed0/final.json`.
+
+| model | lr | best val CE | best step | wall-clock (s) | steps/sec |
+|---|---|---|---|---|---|
+| bdh_g100 | 0.0003 | 0.0329 | 4000 | 14631.1 | 0.2734 |
+| bdh_g100 | 0.001 | 0.0252 | 4000 | 17432.1 | 0.2295 |
+| bdh_g100 | 0.003 | 0.0240 | 4000 | 16402.8 | 0.2439 |
+| lstm | 0.0003 | 0.0496 | 4000 | 703.8 | 5.6834 |
+| lstm | 0.001 | 0.0339 | 4000 | 705.8 | 5.6673 |
+| lstm | 0.003 | 0.0286 | 4000 | 706.0 | 5.6657 |
+| rwkv | 0.0003 | 0.0315 | 4000 | 7994.1 | 0.5004 |
+| rwkv | 0.001 | 0.0244 | 4000 | 8012.8 | 0.4992 |
+| rwkv | 0.003 | 0.0235 | 4000 | 7981.1 | 0.5012 |
+
+Selected best LR per model (lowest best_val_ce): **bdh_g100 → 0.003** (0.0240), **lstm → 0.003** (0.0286), **rwkv → 0.003** (0.0235).
+
+**Wall-clock varies ~2× across runs:** the machine alternated between lid-closed dark-wake throttling (~0.23–0.27 steps/s BDH) and awake operation.
+
+**E1 notes:** all 9 `final.json` files present; all `best_val_ce` values finite (range 0.0235–0.0496); no divergence observed.
