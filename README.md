@@ -85,7 +85,7 @@ Upstream attention has no softmax and no explicit state: it is the parallel form
 
 Two consequences shape this study:
 
-1. The recurrent equivalent of upstream's state is one `N x D` matrix per head per level (call it $\sigma$), so there are `n_layer` distinct $\sigma$'s per sequence, not an `n x n` synapse matrix. The `N x N` "synapse matrix" is a **view**, $\tilde{\sigma} = \sigma \cdot$ `encoder_v`, of rank at most `D`; it is never materialized by default.
+1. The recurrent equivalent of upstream's state is one `N x D` matrix per head per level (call it $\sigma$), so there are `n_layer` distinct $\sigma$'s per sequence, not an `n x n` synapse matrix. The `N x N` "synapse matrix" is a **view**, $\tilde{\sigma} = \sigma \cdot$ `encoder_v`, of rank at most `D`; it is never materialized.
 2. Upstream has **no forgetting**: the state is a pure sum. RoPE rotates, it does not decay. H2 needs a controlled knob, so HBWM adds one.
 
 ### `HBWMCore` (`hbwm/bdh/core.py`)
@@ -114,7 +114,7 @@ with $k_t = q_t =$ `rope(relu(x_t @ encoder), t)` and $v_t = x_t$. Reading befor
 | `scaled` with scale s produces exactly s times the `full` delta | `atol = 1e-6` |
 | gamma = 1, shared layers, eval mode vs. upstream `BDH.forward` | bit-identical |
 
-**Synapse view.** `synapse(sigma, level, rows, cols)` computes `sigma[h, rows, :] @ encoder_v[h, :, cols]` lazily for index sets; a `materialize=True` escape hatch exists for tiny configs and notebooks.
+**Synapse view.** `synapse(sigma_level, level, head, rows, cols)` computes `sigma_level[:, head][:, rows, :] @ encoder_v[head][:, cols]` lazily for index sets, so the full N x N is never materialized.
 
 ### Reference configuration
 
@@ -151,7 +151,7 @@ A 9x9 gridworld with 3 objects of **distinct** types (drawn from 4 possible type
 | 17 to 27 | `Y_0` ... `Y_10` |
 | 28 | `EMPTY` |
 | 29 | `WALL` |
-| 30 to 33 | `OBJ_1` ... `OBJ_4` |
+| 30 to 33 | `OBJ_0` ... `OBJ_3` |
 
 **Sequence layout.**
 
@@ -293,7 +293,7 @@ Anything not listed above is exploratory (notably the `belief()` heatmaps).
 uv sync --extra dev
 uv run pytest -q
 
-# 1. Data: 27,000 episodes into data/grid9/{split}.npz  (about 31 s, ~60 MB)
+# 1. Data: 27,000 episodes into data/grid9/{split}.npz  (about 31 s, ~14 MB compressed)
 uv run python -m hbwm.envs.dataset --config experiments/data/grid9.json
 
 # 2. Optional pre-flight
