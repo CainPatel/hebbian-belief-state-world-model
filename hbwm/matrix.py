@@ -87,13 +87,21 @@ def main():
             (Path(root) / exp / "best_lr.json").write_text(
                 json.dumps({stem: best_lr(root, exp, stem) for stem in MODELS}, indent=2) + "\n")
     elif args.phase == "probes":
+        failed = []
         for job in headline_runs(root, exp):
             rd = run_path(root, exp, *job)
             if (rd / "probes" / "done.json").exists():
                 print(f"skip (probed): {rd}")
                 continue
-            _run([sys.executable, "-m", "hbwm.probes.run", "--run-dir", str(rd), "--data", args.data,
-                  "--preset", "study1"], args.dry_run)
+            try:
+                _run([sys.executable, "-m", "hbwm.probes.run", "--run-dir", str(rd), "--data", args.data,
+                      "--preset", "study1"], args.dry_run)
+            except subprocess.CalledProcessError as e:  # e.g. an OOM kill: rerunning re-probes only this one
+                print(f"probe run failed (rc={e.returncode}): {rd}", flush=True)
+                failed.append(str(rd))
+        print(f"probes phase: {len(failed)} failed: {' '.join(failed)}", flush=True)
+        if failed:
+            sys.exit(1)  # the shell chain must still stop before evaluate
     else:
         _run([sys.executable, "-m", "hbwm.probes.evaluate", "--root", root, "--exp", exp,
               "--data", args.data], args.dry_run)

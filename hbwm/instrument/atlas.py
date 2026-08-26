@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 from hbwm.bdh.core import HBWMCore
+from hbwm.device import release_memory
 from hbwm.envs import tokenizer as tk
 from hbwm.envs.dataset import EpisodeData
 from hbwm.instrument.recorder import SigmaRecorder
@@ -41,6 +42,10 @@ def build_atlas(model: HBWMCore, data: EpisodeData, n_episodes=500, top_m=32, ba
                 cell_cnt.index_add_(0, cc, torch.ones(len(cc)))
 
         rec.run(tokens, None, fn)
+        # The atlas is the last recorder pass of a probe run, on a process that has already streamed
+        # features several times; this pass touches every position of every episode, so return the
+        # per-position temporaries to the system between batches rather than at the end.
+        release_memory(device)
     tok_mean = tok_sum / tok_cnt.clamp(min=1)[None, :, None, None]
     cell_mean = cell_sum / cell_cnt.clamp(min=1)[None, :, None, None]
     return {

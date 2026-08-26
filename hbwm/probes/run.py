@@ -3,6 +3,7 @@
 import argparse
 import dataclasses
 import json
+import resource
 import shutil
 import time
 from pathlib import Path
@@ -11,7 +12,7 @@ import numpy as np
 
 from hbwm.bdh.core import HBWMCore
 from hbwm.config import to_dict
-from hbwm.device import select_device
+from hbwm.device import release_memory, select_device
 from hbwm.envs.dataset import EpisodeData
 from hbwm.instrument.atlas import build_atlas, save_atlas
 from hbwm.instrument.features import feature_dim, n_levels, neuron_of_feature
@@ -29,6 +30,18 @@ from hbwm.train import load_checkpoint
 
 def _l(x):
     return list(x)
+
+
+def _log_mem(tag: str) -> None:
+    """One `[mem]` line per stage boundary, for the matrix log. On macOS ru_maxrss is bytes."""
+    print(f"[mem] {tag} maxrss_gb={resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**30:.1f}", flush=True)
+
+
+def _stage_boundary(tag: str, device=None) -> None:
+    """Between recorder passes: return what the finished stage no longer holds, then log the high-water
+    mark. Purely hygiene — nothing still referenced is touched, so results are unaffected."""
+    release_memory(device)
+    _log_mem(tag)
 
 
 @dataclasses.dataclass
@@ -53,7 +66,10 @@ class ProbeConfig:
 
 
 PRESETS = {
-    "study1": ProbeConfig(),
+    # batch_eps=32 (not the 64 default): smaller recorder passes bound the peak device footprint of a
+    # Study 1 checkpoint. Grouping only — every pair is still extracted exactly once, and each row is
+    # written back by index, so the features and every downstream number are unchanged.
+    "study1": ProbeConfig(batch_eps=32),
     "smoke": ProbeConfig(small_features=["sigma_rownorm"], per_obj=2, l2_grid=[1e-3], epochs=2, n_train_full=50,
                          batch_eps=4, h4_ks=[2, 4], atlas_episodes=4, n_boot=20),
 }
@@ -88,9 +104,10 @@ def gather_columns(X, cols, chunk=2048) -> np.ndarray:
 
 
 def fit_and_eval_stage(model, data, pairs, specs, pcfg, n_classes, device, out_dir, cache_dir, memmap_specs,
-                       select_h34, h3p, chance, ceiling):
+                       select_h34, h3p, chance, ceiling, stage="stage"):
     """data = (d_tr, d_va, d_te); pairs = (p_tr, p_va, p_te). Trains + selects on val + evaluates on test,
-    runs H4 top-k retrains and H3 readouts for the specs returned by select_h34(results)."""
+    runs H4 top-k retrains and H3 readouts for the specs returned by select_h34(results). `stage` only
+    names this stage in the `[mem]` log lines."""
     d_tr, d_va, d_te = data
     p_tr, p_va, p_te = pairs
     dims = {s: feature_dim(model, s[0]) for s in specs}
@@ -98,6 +115,7 @@ def fit_and_eval_stage(model, data, pairs, specs, pcfg, n_classes, device, out_d
                      np.float32, cache_dir, memmap_specs)
     probes = {s: train_probes_multi(X[s], p_tr.label, n_classes, pcfg.l2_grid, pcfg.epochs, pcfg.lr,
                                     pcfg.batch, pcfg.seed, device) for s in specs}
+    _stage_boundary(f"{stage}:train", device)
     val = predict_proba_stream(probes, iter_features(model, d_va, p_va, specs, pcfg.batch_eps, device),
                                len(p_va), n_classes, device)
     results, best = {}, {}
@@ -107,12 +125,15 @@ def fit_and_eval_stage(model, data, pairs, specs, pcfg, n_classes, device, out_d
         results[s] = {"feature": s[0], "level": s[1], "n_features": dims[s], "n_train": len(p_tr),
                       "n_val": len(p_va), "n_test": len(p_te), "val_acc": {f"{k:g}": v for k, v in val_acc.items()},
                       "best_l2": best[s], "chance": chance, "ceiling": ceiling}
+    del val  # every val probability the run needs is already summarised in results[s]["val_acc"]
+    _stage_boundary(f"{stage}:val", device)
     sel = select_h34(results) if select_h34 else []
     test_probes = {s: {"best": probes[s][best[s]]} for s in specs}
+    del probes  # the selected probes are those same objects; the unselected L2s are dead weight
     columns, h4_rank = {}, {}
     if pcfg.h4:
         for s in sel:
-            W = probes[s][best[s]].linear.weight.detach().cpu().numpy()
+            W = test_probes[s]["best"].linear.weight.detach().cpu().numpy()
             rank = np.argsort(-np.linalg.norm(W, axis=0))
             ks = [k for k in pcfg.h4_ks if k < dims[s]]
             if not ks:
@@ -126,8 +147,15 @@ def fit_and_eval_stage(model, data, pairs, specs, pcfg, n_classes, device, out_d
                                         pcfg.batch, pcfg.seed, device)[best[s]]
                 test_probes[s][f"k{k}"] = pk
                 columns[s][f"k{k}"] = top[:k]
+            del Xk  # up to max(h4_ks) fp32 columns of the training set, per selected spec
+            release_memory(device)
+    # Last use of X is the gather_columns above: drop the ~24 GB fp32 cache and close the fp16 memmaps
+    # before the test and H3 passes push more through the recorder.
+    del X
+    _stage_boundary(f"{stage}:h4", device)
     test = predict_proba_stream(test_probes, iter_features(model, d_te, p_te, specs, pcfg.batch_eps, device),
                                 len(p_te), n_classes, device, columns)
+    _stage_boundary(f"{stage}:test", device)
     for s in specs:
         probs = test[s]["best"]
         correct = probs.argmax(1) == p_te.label
@@ -154,14 +182,17 @@ def fit_and_eval_stage(model, data, pairs, specs, pcfg, n_classes, device, out_d
                 "n_neurons_total": (model.hcfg.n_head * model.hcfg.n_neurons if is_neuron_feature else None),
             }
         (out_dir / f"{spec_name(s)}.json").write_text(json.dumps(r, indent=2) + "\n")
+    del test  # written out above (probs as fp16 npz); the H3 pass builds its own
     if pcfg.h3 and h3p is not None and len(h3p) and sel:
-        h3 = predict_proba_stream({s: {"best": probes[s][best[s]]} for s in sel},
+        h3 = predict_proba_stream({s: {"best": test_probes[s]["best"]} for s in sel},
                                   iter_features(model, d_te, h3p, sel, pcfg.batch_eps, device), len(h3p), n_classes, device)
         rows = np.arange(len(h3p))
         for s in sel:
             probs = h3[s]["best"]
             np.savez(out_dir / f"{spec_name(s)}_h3.npz", p_old=probs[rows, h3p.old_cell], p_new=probs[rows, h3p.new_cell],
                      ep=h3p.ep, t=h3p.t, steps_since_reobs=h3p.steps_since_reobs, visible_now=h3p.visible_now)
+        del h3
+    _stage_boundary(f"{stage}:h3", device)
     return results
 
 
@@ -190,8 +221,9 @@ def run_probes(run_dir, data_dir, pcfg: ProbeConfig, device=None) -> dict:
             levels = list(range(n_levels(model)))
             specs_small = [(f, lvl) for f in pcfg.small_features for lvl in levels]
             res_small = fit_and_eval_stage(model, data, pairs, specs_small, pcfg, n_classes, device, out, cache, (),
-                                           None, None, chance, ceiling)
+                                           None, None, chance, ceiling, stage="small")
             all_results.update(res_small)
+            _stage_boundary("small:done", device)
             if pcfg.full_feature:
                 if pcfg.full_levels == "auto" and "sigma_rownorm" not in pcfg.small_features:
                     # silently probing every level instead would blow the sigma_full budget (~25 GB/level)
@@ -214,18 +246,21 @@ def run_probes(run_dir, data_dir, pcfg: ProbeConfig, device=None) -> dict:
                     return [max(specs_full, key=lambda s: val_best(results[s]))]
 
                 res_full = fit_and_eval_stage(model, data, (p_tr_full, p_va, p_te), specs_full, pcfg, n_classes, device,
-                                              out, cache, tuple(specs_full), select_best_full, h3p, chance, ceiling)
+                                              out, cache, tuple(specs_full), select_best_full, h3p, chance, ceiling,
+                                              stage="full")
                 all_results.update(res_full)
                 summary["best_full_spec"] = spec_name(select_best_full(res_full)[0])
+                _stage_boundary("full:done", device)
             if pcfg.atlas:
                 try:  # exploratory: an atlas failure must never cost the preregistered probe results
                     save_atlas(build_atlas(model, d_tr, pcfg.atlas_episodes, device=device), out / "atlas.json")
                 except Exception as e:
                     summary["atlas_error"] = repr(e)
+                _stage_boundary("atlas:done", device)
         else:
             specs = [("state_vec", None)]
             all_results.update(fit_and_eval_stage(model, data, pairs, specs, pcfg, n_classes, device, out, cache, (),
-                                                  lambda r: specs, h3p, chance, ceiling))
+                                                  lambda r: specs, h3p, chance, ceiling, stage="baseline"))
     finally:  # the fp16 sigma_full memmaps are ~25 GB per level in Study 1 and must not survive a failure
         shutil.rmtree(cache, ignore_errors=True)
     summary["specs"] = sorted(spec_name(s) for s in all_results)

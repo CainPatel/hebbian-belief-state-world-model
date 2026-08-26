@@ -1,7 +1,12 @@
 import json
+import subprocess
 
+import pytest
+
+from hbwm import matrix
 from hbwm.matrix import (
     GAMMA_ARMS,
+    LRS,
     MODELS,
     best_lr,
     e1_jobs,
@@ -46,3 +51,35 @@ def test_best_lr_and_followups(tmp_path):
     assert "--data-dir" not in cmd  # no data dir given -> train.py falls back to its config
     cmd = train_cmd(("lstm", 1e-3, 2), tmp_path, data="data/grid9")
     assert cmd[cmd.index("--data-dir") + 1] == "data/grid9"
+
+
+def test_probes_phase_continues_past_a_failing_checkpoint(tmp_path, monkeypatch, capsys):
+    """A probe run killed by the OOM killer must not discard the other 14 checkpoints of the phase."""
+    for stem in MODELS:
+        for lr in LRS:
+            _fake_done(tmp_path, "x", stem, lr, 0, 0.5 if lr == 1e-3 else 0.9)
+    attempted = []
+
+    def fake_run(cmd, dry):
+        attempted.append(cmd[cmd.index("--run-dir") + 1])
+        if len(attempted) == 1:
+            raise subprocess.CalledProcessError(-9, cmd)  # SIGKILL, as Jetsam delivers it
+
+    monkeypatch.setattr(matrix, "_run", fake_run)
+    monkeypatch.setattr("sys.argv", ["matrix", "--phase", "probes", "--root", str(tmp_path), "--exp", "x"])
+    with pytest.raises(SystemExit) as exc:
+        matrix.main()
+    assert exc.value.code == 1  # the shell chain still stops before evaluate
+    assert len(attempted) == len(headline_runs(tmp_path, "x")) == 15  # every later checkpoint was tried
+    assert f"probes phase: 1 failed: {attempted[0]}" in capsys.readouterr().out
+
+
+def test_probes_phase_exits_cleanly_when_every_checkpoint_succeeds(tmp_path, monkeypatch):
+    for stem in MODELS:
+        for lr in LRS:
+            _fake_done(tmp_path, "x", stem, lr, 0, 0.5 if lr == 1e-3 else 0.9)
+    attempted = []
+    monkeypatch.setattr(matrix, "_run", lambda cmd, dry: attempted.append(cmd))
+    monkeypatch.setattr("sys.argv", ["matrix", "--phase", "probes", "--root", str(tmp_path), "--exp", "x"])
+    matrix.main()  # no SystemExit
+    assert len(attempted) == 15
