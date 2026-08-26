@@ -3,6 +3,7 @@
 import argparse
 import json
 import math
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -97,6 +98,10 @@ def main():
                 _run([sys.executable, "-m", "hbwm.probes.run", "--run-dir", str(rd), "--data", args.data,
                       "--preset", "study1"], args.dry_run)
             except subprocess.CalledProcessError as e:  # e.g. an OOM kill: rerunning re-probes only this one
+                # A SIGKILL is uncatchable, so run_probes' own `finally` never ran and its fp16
+                # sigma_full memmaps (~25 GB per level) are stranded. This process is the one left
+                # standing, and the next checkpoint needs that disk space.
+                shutil.rmtree(rd / "probes" / "cache", ignore_errors=True)
                 print(f"probe run failed (rc={e.returncode}): {rd}", flush=True)
                 failed.append(str(rd))
         print(f"probes phase: {len(failed)} failed: {' '.join(failed)}", flush=True)

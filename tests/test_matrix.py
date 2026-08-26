@@ -53,11 +53,22 @@ def test_best_lr_and_followups(tmp_path):
     assert cmd[cmd.index("--data-dir") + 1] == "data/grid9"
 
 
+def _fake_cache(rd):
+    """A probe cache as a SIGKILLed run would leave it: ~25 GB of fp16 memmaps per sigma_full level."""
+    cache = rd / "probes" / "cache"
+    cache.mkdir(parents=True)
+    (cache / "x.npy").write_bytes(b"0")
+    return cache
+
+
 def test_probes_phase_continues_past_a_failing_checkpoint(tmp_path, monkeypatch, capsys):
-    """A probe run killed by the OOM killer must not discard the other 14 checkpoints of the phase."""
+    """A probe run killed by the OOM killer must not discard the other 14 checkpoints of the phase,
+    and its orphaned cache must go: an uncatchable SIGKILL never runs run_probes' own cleanup."""
     for stem in MODELS:
         for lr in LRS:
             _fake_done(tmp_path, "x", stem, lr, 0, 0.5 if lr == 1e-3 else 0.9)
+    jobs = headline_runs(tmp_path, "x")
+    doomed, survivor = (_fake_cache(run_path(tmp_path, "x", *j)) for j in jobs[:2])
     attempted = []
 
     def fake_run(cmd, dry):
@@ -70,8 +81,10 @@ def test_probes_phase_continues_past_a_failing_checkpoint(tmp_path, monkeypatch,
     with pytest.raises(SystemExit) as exc:
         matrix.main()
     assert exc.value.code == 1  # the shell chain still stops before evaluate
-    assert len(attempted) == len(headline_runs(tmp_path, "x")) == 15  # every later checkpoint was tried
+    assert len(attempted) == len(jobs) == 15  # every later checkpoint was tried
     assert f"probes phase: 1 failed: {attempted[0]}" in capsys.readouterr().out
+    assert not doomed.exists()  # the stranded memmaps of the killed run are gone
+    assert (survivor / "x.npy").exists()  # a checkpoint that did not fail is left alone
 
 
 def test_probes_phase_exits_cleanly_when_every_checkpoint_succeeds(tmp_path, monkeypatch):
