@@ -4,6 +4,8 @@ A world model whose belief state is the plastic synapse state $\sigma$ of a BDH 
 Study 1 asks a single question: **does $\sigma$ encode linearly readable beliefs about a partially observed gridworld?**
 Three parameter-matched sequence models (BDH, LSTM, RWKV) are trained to predict observations in a 9x9 gridworld, their internal states are read out with standardized linear probes, and four preregistered hypotheses (H1 to H4) are decided by rules fixed before any headline run.
 
+**New here? Read [docs/EXPLAINER.md](docs/EXPLAINER.md)**: the architecture, the method, why each experimental choice was made, and what was found, in one document.
+
 Proposal: [SPEC.md](SPEC.md) &middot; Buildable design: [docs/superpowers/specs/2026-08-22-hbwm-study1-design.md](docs/superpowers/specs/2026-08-22-hbwm-study1-design.md) &middot; Results log: [RESULTS.md](RESULTS.md)
 
 ---
