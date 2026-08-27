@@ -88,11 +88,229 @@ pinned to `"device": "mps"` for the Phase 5 matrix.
 
 Decision rules: see README.md. Preregistration commit: `e674b1da138f905670dde5571e1a1890b134fe36`.
 
-## Study 1 headline (filled by Task 34)
+## Study 1 headline
 
-- Best LRs: (from runs/study1/best_lr.json)
-- Probe accuracy table, H1–H4 decisions, prediction-quality table: copied from runs/study1/results/results.md
-- Figures: runs/study1/results/h2_curves.png, h4_curves.png; heatmap frames under runs/study1/<run>/viz/
+Study 1 is complete. The primary hypothesis H1 was **not supported**, and the preregistered kill
+criterion fired. This is a preregistered negative result. The decisions below were taken strictly
+under the rules frozen at preregistration commit
+`e674b1da138f905670dde5571e1a1890b134fe36`, before any headline run.
+
+Best learning rates (`runs/study1/best_lr.json`): bdh_g100 3e-3, lstm 3e-3, rwkv 3e-3. Every
+headline run and both γ arms use lr 0.003.
+
+### Aggregated results
+
+Pasted from `runs/study1/results/results.md`, produced by
+`uv run python -m hbwm.probes.evaluate --root runs --exp study1 --data data/grid9`. Numbers are
+verbatim; only the heading levels are demoted one step so the tables nest under this section.
+
+#### Probe accuracy (test, best level per seed; mean ± std over 3 seeds)
+
+| model | feature | acc | chance | ceiling | #features | n_train | levels |
+|---|---|---|---|---|---|---|---|
+| bdh_g100 | sigma_full | 0.101 ± 0.007 | 0.011 | 1.000 | 524288 | 24000 | [3, 3, 4] |
+| bdh_g100 | sigma_rownorm | 0.172 ± 0.008 | 0.011 | 1.000 | 8192 | 61400 | [4, 3, 4] |
+| bdh_g100 | x_sparse | 0.062 ± 0.009 | 0.011 | 1.000 | 8192 | 61400 | [5, 4, 5] |
+| bdh_g100 | resid | 0.040 ± 0.005 | 0.011 | 1.000 | 64 | 61400 | [5, 3, 5] |
+| bdh_g099 | sigma_full | 0.099 ± 0.004 | 0.011 | 1.000 | 524288 | 24000 | [3, 3, 3] |
+| bdh_g099 | sigma_rownorm | 0.180 ± 0.001 | 0.011 | 1.000 | 8192 | 61400 | [3, 3, 3] |
+| bdh_g099 | x_sparse | 0.079 ± 0.002 | 0.011 | 1.000 | 8192 | 61400 | [3, 3, 4] |
+| bdh_g099 | resid | 0.044 ± 0.004 | 0.011 | 1.000 | 64 | 61400 | [4, 5, 5] |
+| bdh_g097 | sigma_full | 0.065 ± 0.001 | 0.011 | 1.000 | 524288 | 24000 | [3, 3, 3] |
+| bdh_g097 | sigma_rownorm | 0.130 ± 0.002 | 0.011 | 1.000 | 8192 | 61400 | [3, 3, 3] |
+| bdh_g097 | x_sparse | 0.068 ± 0.009 | 0.011 | 1.000 | 8192 | 61400 | [4, 4, 4] |
+| bdh_g097 | resid | 0.038 ± 0.005 | 0.011 | 1.000 | 64 | 61400 | [5, 5, 3] |
+| lstm | state_vec | 0.171 ± 0.006 | 0.011 | 1.000 | 1400 | 61400 | [None, None, None] |
+| rwkv | state_vec | 0.218 ± 0.007 | 0.011 | 1.000 | 3520 | 61400 | [None, None, None] |
+
+#### H1 — supported: **False** (margin 0.05)
+
+| comparator | mean diff | paired diffs | passes |
+|---|---|---|---|
+| x_sparse | +0.039 | [0.044, 0.038, 0.034] | False |
+| lstm | -0.070 | [-0.073, -0.07, -0.065] | False |
+| rwkv | -0.117 | [-0.104, -0.132, -0.115] | False |
+
+#### H2 — decay curves (accuracy by steps-since-seen bucket)
+
+| model | 1-4 | 5-8 | 9-16 | 17-32 | 33-64 | 65+ | graceful |
+|---|---|---|---|---|---|---|---|
+| bdh_g100 | 0.097 | 0.116 | 0.105 | 0.084 | 0.082 | 0.101 | True |
+| bdh_g099 | 0.133 | 0.132 | 0.088 | 0.032 | 0.016 | 0.020 | False |
+| bdh_g097 | 0.101 | 0.090 | 0.039 | 0.015 | 0.013 | 0.018 | False |
+| lstm | 0.279 | 0.198 | 0.128 | 0.057 | 0.022 | 0.010 | False |
+| rwkv | 0.322 | 0.271 | 0.184 | 0.080 | 0.029 | 0.010 | False |
+
+Test pairs per bucket (probe_test, shared by all seeds):
+
+| model | n(1-4) | n(5-8) | n(9-16) | n(17-32) | n(33-64) | n(65+) |
+|---|---|---|---|---|---|---|
+| bdh_g100 | 11660 | 10985 | 9204 | 5716 | 2812 | 662 |
+| bdh_g099 | 11660 | 10985 | 9204 | 5716 | 2812 | 662 |
+| bdh_g097 | 11660 | 10985 | 9204 | 5716 | 2812 | 662 |
+| lstm | 11660 | 10985 | 9204 | 5716 | 2812 | 662 |
+| rwkv | 11660 | 10985 | 9204 | 5716 | 2812 | 662 |
+
+#### H3 — belief revision latency
+
+| model | mean frac(latency ≤ 5) | supported | frac(≤5), not-visible steps only (exploratory) |
+|---|---|---|---|
+| bdh_g100 | 0.157 | False | 0.130 |
+| bdh_g099 | 0.300 | False | 0.231 |
+| bdh_g097 | 0.352 | False | 0.277 |
+| lstm | 0.940 | True | 0.838 |
+| rwkv | 0.953 | True | 0.845 |
+
+#### H4 — sparsity (k90 = min top-k features reaching 90% of full accuracy)
+
+| model | median k90 | #features | strong (≤256) | weak (≤1%) |
+|---|---|---|---|---|
+| bdh_g100 | 524288 | 524288 | False | False |
+| bdh_g099 | 524288 | 524288 | False | False |
+| bdh_g097 | 524288 | 524288 | False | False |
+| lstm | 256 | 1400 | True | False |
+| rwkv | 256 | 3520 | True | False |
+
+#### Prediction quality
+
+| model | params | lr | val CE | test CE | test CE (window) |
+|---|---|---|---|---|---|
+| bdh_g100 | 1577216 | 0.003 | 0.0242 | 0.0246 | 0.0250 |
+| bdh_g099 | 1577216 | 0.003 | 0.0244 | 0.0249 | 0.0253 |
+| bdh_g097 | 1577216 | 0.003 | 0.0268 | 0.0274 | 0.0284 |
+| lstm | 1579310 | 0.003 | 0.0284 | 0.0291 | 0.0305 |
+| rwkv | 1631168 | 0.003 | 0.0238 | 0.0242 | 0.0246 |
+
+### Decisions under the preregistered rules
+
+- **H1: not supported.** Mean σ_full accuracy is 0.101, which beats x_sparse (0.062) by only
+  +0.039 and so misses the required 5-point margin, and loses outright to both the LSTM state
+  (0.171, mean diff -0.070) and the RWKV state (0.218, mean diff -0.117), with every paired-by-seed
+  difference against both baselines negative.
+- **Kill criterion: fired.** The preregistered kill condition is "H1 fails against the LSTM state",
+  which is exactly what happened, so the preregistered response applies: write the result up and
+  stop or pivot rather than continue tuning Study 1.
+- **H2: γ = 1.0 passes, everything else fails.** The γ = 1.0 arm satisfies the graceful test with
+  acc(33-64)/acc(1-4) = 0.85 (0.846) and no bucket below half of its predecessor, while γ = 0.99
+  (0.12), γ = 0.97 (0.13), the LSTM (0.08) and RWKV (0.09) all fall below the 0.5 ratio bar.
+- **H3: not supported for any BDH arm.** The mean fraction of moved-and-re-observed episodes whose
+  belief flips within 5 steps is 0.157 (γ = 1.0), 0.300 (γ = 0.99) and 0.352 (γ = 0.97), all below
+  the preregistered 0.7 bar, while both baselines pass it (LSTM 0.940, RWKV 0.953).
+- **H4: not supported for BDH.** Median k90 for every BDH arm is 524,288, the full feature count, so
+  neither the strong criterion (median k90 ≤ 256) nor the weak one (≤ 1% of features) is met,
+  whereas both baselines are strong-sparse at median k90 = 256.
+
+### Required caveats
+
+- **γ applies per token, not per environment step.** Each environment step is 12 tokens
+  (`STEP_LEN = 12` in `hbwm/envs/tokenizer.py`: one action token plus an 11-token observation), so
+  the effective per-step decay is γ^12: 0.99 becomes 0.886 per step (half-life about 5.7 steps) and
+  0.97 becomes 0.694 per step (half-life about 1.9 steps). The γ arms are therefore far more
+  aggressive than their names suggest, and the H2 γ-arm curves should be read against those
+  per-step figures rather than against 0.99 and 0.97.
+- **k90 = n_features means no proper sparse subset reached 90% of full accuracy.** The terminal grid
+  point k = all comes from the spec and was adopted by a pre-analysis ruling; the strong and weak
+  verdicts are unaffected by it.
+- **The H3 headline rule counts the re-observation step itself**, at which the object is visible in
+  the agent's 3x3 window. The exploratory not-visible-only variant is reported alongside it (BDH
+  arms 0.130, 0.231, 0.277; baselines 0.838 and 0.845) and does not change any verdict.
+- **The oracle-memory ceiling is 1.0 by construction.** Probe eligibility excludes stale pairs and
+  static objects never move, so the ceiling is reported for completeness and is not an informative
+  baseline.
+- **σ_full probes train on 24,000 stratified examples against 61,400 for every comparator.** This is
+  the preregistered protocol; the `n_train` column in the probe accuracy table makes the asymmetry
+  visible.
+- **Wall-clock and engineering notes.** Runs alternated between lid-closed dark-wake throttling and
+  awake operation, which is why per-run wall-clock varies by roughly 2x at identical settings. One
+  probe run was OOM-killed and re-run after memory fixes. A `batch_eps` change (64 to 32) made two
+  cached fp16 probability archives differ by 1 ulp with zero prediction flips; this is an
+  engineering note only, and no reported metric changed.
+
+### Post-hoc, not preregistered
+
+The four observations below are hypotheses for follow-up, not conclusions. None of them were
+registered in advance and none of them change a decision above.
+
+- **(a) σ row-norms beat σ_full.** The 8,192-dimensional row-norm view decodes at 0.172, above
+  σ_full's 0.101 and level with the LSTM state's 0.171. One candidate explanation is that the
+  524,288-dimensional linear probe trained on 24,000 examples underfits, so the σ_full number may
+  understate what σ contains. This is untested.
+- **(b) Prediction quality is not the bottleneck.** BDH's test CE is 0.0246 at γ = 1.0 against
+  0.0291 for the LSTM and 0.0242 for RWKV, so BDH predicts as well as or better than the baselines
+  it loses to on every probe hypothesis. The belief information demonstrably drives next-token
+  behavior; what the probes show is that it is not linearly readable from σ at this scale and under
+  this protocol.
+- **(c) The γ = 1.0 H2 curve is graceful but uniformly low**, roughly 0.08 to 0.12 across all six
+  buckets. That is the flatness of a weak signal rather than evidence of robust memory, and the
+  graceful verdict should be read with that in mind.
+- **(d) Every decoder sits far above chance and far below ceiling.** All accuracies are well above
+  chance (0.011) and well below the 1.0 oracle ceiling, so exact-cell readout of out-of-view objects
+  is hard for every architecture tested here, not only for BDH.
+
+### What we would change (post-hoc)
+
+None of the following was preregistered, and none of it is a claim that the result would change. As
+a follow-up we would scale probe capacity and epochs to the feature count rather than holding them
+fixed, and add MLP probes as a non-preregistered comparison, so that a null on σ_full separates
+"not encoded" from "not linearly decodable at this probe budget". We would apply decay per
+environment step rather than per token, so a named γ means what it appears to mean. We would raise
+`n_train` for σ_full toward the 61,400 used by every other feature set, removing the training-set
+asymmetry. We would define H3 from the first step at which the object is no longer visible, so the
+headline number does not include a step where the answer is in the window. And we would try
+readouts on σ deltas, or on the synapse view σ·encoder_v, rather than on raw σ entries.
+
+### Exploratory belief heatmaps
+
+Rendered with `uv run python -m hbwm.viz.heatmaps --run-dir runs/study1/bdh_g100_lr0.003/seed0
+--episode {0,1}` at level L3 (the best σ_full level for that checkpoint), 97 frames plus `anim.gif`
+per episode, written to `runs/study1/bdh_g100_lr0.003/seed0/viz/ep0_L3/` and `.../viz/ep1_L3/`.
+Episode 1 is the first `probe_test` episode that is both moved and re-observed
+(`reobserved_t = 34`); episode 0 is moved but never re-observed. These figures are exploratory and
+were declared as such at preregistration.
+
+- Episode 0, t = 48 (`docs/figures/belief_ep0_t48.png`): all three object maps are high-frequency
+  and unstructured, with bright and dark cells scattered across the grid and no peak at the cyan
+  true-object marker, including for OBJ_0, which is visible in the window at that step.
+- Episode 1, t = 34, the re-observation step (`docs/figures/belief_ep1_reobs_t34.png`): OBJ_3 has
+  just been seen (steps since seen = 0) inside the top-left window, yet its map is darkest exactly
+  there and brightest along the right edge, and the three object panels are near-copies of one
+  another.
+- Episode 1, t = 0 (`runs/study1/bdh_g100_lr0.003/seed0/viz/ep1_L3/frame_000.png`): the three
+  panels are nearly identical to each other, a smooth gradient that is dark near the agent at
+  top-left and bright toward the bottom-right, again with no object-specific structure.
+
+Read honestly, these maps look dominated by an object-independent component and show no localized
+peak at the true cell, which is consistent with the H1, H3 and H4 results rather than in tension
+with them.
+
+### Probe wall-clock
+
+`elapsed_s` from the 15 `runs/study1/*/seed*/probes/done.json` files:
+
+| model | seed 0 | seed 1 | seed 2 | total (s) |
+|---|---|---|---|---|
+| bdh_g100 | 5460.4 | 5313.2 | 5131.4 | 15905.0 |
+| bdh_g099 | 5661.5 | 5612.5 | 5611.1 | 16885.1 |
+| bdh_g097 | 5558.9 | 5442.7 | 5371.2 | 16372.8 |
+| lstm | 76.7 | 75.0 | 74.2 | 225.9 |
+| rwkv | 279.5 | 280.0 | 279.9 | 839.4 |
+
+All 15 checkpoints total 50,228.2 s (about 13.95 h). The BDH checkpoints cost 5,131 to 5,662 s each
+because each one runs 21 probe specs including three σ_full levels at 524,288 features; the
+baselines run a single `state_vec` spec and cost 74 to 280 s. `best_full_spec` is `sigma_full_L3`
+for 8 of the 9 BDH checkpoints and `sigma_full_L4` for `bdh_g100_lr0.003/seed2`.
+
+### Figures and provenance
+
+- `docs/figures/h2_curves.png` and `docs/figures/h4_curves.png` (copies of
+  `runs/study1/results/h2_curves.png` and `runs/study1/results/h4_curves.png`).
+- `docs/figures/belief_ep0_t48.png` and `docs/figures/belief_ep1_reobs_t34.png` (copies of
+  `runs/study1/bdh_g100_lr0.003/seed0/viz/ep0_L3/frame_048.png` and `.../viz/ep1_L3/frame_034.png`).
+- Full frame sets and animations: `runs/study1/bdh_g100_lr0.003/seed0/viz/ep0_L3/` and
+  `runs/study1/bdh_g100_lr0.003/seed0/viz/ep1_L3/` (gitignored, local only).
+- Aggregation source: `runs/study1/results/{results.md,h1.json,h2.json,h3.json,h4.json,perplexity.json,table.json}`.
+- Preregistration commit: `e674b1da138f905670dde5571e1a1890b134fe36`. All H1 to H4 decisions above
+  were made by the rules frozen in that commit, with no post-hoc adjustment to any threshold.
 
 ## E1 — LR sweep (seed 0)
 
