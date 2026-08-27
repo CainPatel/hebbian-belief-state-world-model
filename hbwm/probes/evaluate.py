@@ -177,11 +177,11 @@ def write_outputs(agg: dict, out_dir) -> None:
             lines.append(f"| {stem} | {f} | {r['mean']:.3f} ± {r['std']:.3f} | {r['chance']:.3f} | {r['ceiling']:.3f} "
                          f"| {r['n_features']} | {_val(r.get('n_train'))} | {levels} |")
     h1 = agg["h1"]
-    lines += ["", f"## H1 — supported: **{h1['supported']}** (margin {h1['margin']:.2f})", "",
+    lines += ["", f"## H1: supported = **{h1['supported']}** (margin {h1['margin']:.2f})", "",
               "| comparator | mean diff | paired diffs | passes |", "|---|---|---|---|"]
     for n, c in h1["comparators"].items():
         lines.append(f"| {n} | {c['mean_diff']:+.3f} | {[round(d, 3) for d in c['paired_diffs']]} | {c['passes']} |")
-    lines += ["", "## H2 — decay curves (accuracy by steps-since-seen bucket)", "",
+    lines += ["", "## H2: decay curves (accuracy by steps-since-seen bucket)", "",
               "| model | " + " | ".join(BUCKET_NAMES) + " | graceful |", "|---|" + "---|" * (len(BUCKET_NAMES) + 1)]
     for stem, r in agg["h2"].items():
         lines.append(f"| {stem} | " + " | ".join(_fmt(r["values"].get(b)) for b in BUCKET_NAMES) + f" | {r['graceful']} |")
@@ -189,12 +189,12 @@ def write_outputs(agg: dict, out_dir) -> None:
               "| model | " + " | ".join(f"n({b})" for b in BUCKET_NAMES) + " |", "|---|" + "---|" * len(BUCKET_NAMES)]
     for stem, r in agg["h2"].items():
         lines.append(f"| {stem} | " + " | ".join(_val((r.get("bucket_n") or {}).get(b)) for b in BUCKET_NAMES) + " |")
-    lines += ["", "## H3 — belief revision latency", "",
+    lines += ["", "## H3: belief revision latency", "",
               "| model | mean frac(latency ≤ 5) | supported | frac(≤5), not-visible steps only (exploratory) |",
               "|---|---|---|---|"]
     for stem, r in agg["h3"].items():
         lines.append(f"| {stem} | {r['mean_frac_le5']:.3f} | {r['supported']} | {_fmt(r.get('mean_frac_le5_not_visible'))} |")
-    lines += ["", "## H4 — sparsity (k90 = min top-k features reaching 90% of full accuracy)", "",
+    lines += ["", "## H4: sparsity (k90 = min top-k features reaching 90% of full accuracy)", "",
               "| model | median k90 | #features | strong (≤256) | weak (≤1%) |", "|---|---|---|---|---|"]
     for stem, r in agg["h4"].items():
         lines.append(f"| {stem} | {_fmt(r['median_k90'], 0)} | {r['n_features']} | {r['strong']} | {r['weak']} |")
