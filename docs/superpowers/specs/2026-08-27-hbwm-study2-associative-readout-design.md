@@ -57,6 +57,8 @@ with $q$ sparse and positive, and writes $\sigma \leftarrow \gamma\,\sigma + q \
 
 Notation: $C = 81$ classes (cell ids of a 9x9 grid), $n_h = 4$ heads, $N = 2048$ neurons per head, $D = 64$ value dimensions. $\sigma \in \mathbb{R}^{n_h \times N \times D}$ is one level's state at the feature timestep, per-entry standardized exactly as in Study 1 (mean and std fitted on `probe_train`, std below 1e-6 mapped to 1), then reshaped from the flat 524,288-vector back to $[n_h, N, D]$. Every family has a per-class bias, matching `LinearProbe`.
 
+**Family 4 is the one exception to that order.** Standardization and the inverse rotation do not commute, so family 4 derotates the **raw** state first and standardizes in the derotated frame, with its own statistics. Section 4.4 states the contract and why it has to be that way.
+
 ### 4.1 Family 1, `flat_linear` (control)
 
 $$\mathrm{score}_c = \langle W_c, \sigma \rangle + b_c, \qquad W \in \mathbb{R}^{C \times (n_h N D)}$$
@@ -89,12 +91,19 @@ so the stored code becomes position-**relative** rather than absolute-time-rotat
 
 `derot_flat_linear` is **not** equivalent to `flat_linear`. The transform is orthogonal but depends on the example's own absolute position $t$, so no single fixed $W$ can absorb it; this is the whole reason the family exists. Derotation is applied on the fly when a cached row is loaded, using the pair's absolute token position (`tokenizer.obs_positions(L)[t]`), so no second feature cache is needed.
 
-### 4.5 Family 5, `mlp_rownorm` and `mlp_randproj` (capacity controls)
+**Order contract: derotate first, then standardize.** Standardization is a per-entry affine map with a different scale for each $(h, n, d)$, and $R(-t)$ mixes the neuron-index pairs $(2j, 2j+1)$ at fixed $d$. The two commute only if both members of a rotated pair carry the same scale, which in general they do not, so standardizing first and rotating afterward does not undo RoPE: it applies a rotation to a distorted space, and a null result for family 4 under that order could not be distinguished from never having derotated at all. The preregistered order is therefore: read the raw cached row, apply $R(-t)$ at that row's absolute token position, and only then standardize. The mean and standard deviation are computed **in the derotated frame**, by one extra streaming pass over the cache, so **the derotated families have their own feature statistics, distinct from the undecorated families'**. The same derotate-then-standardize order is used identically when fitting and in the streamed `probe_val` and `probe_test` passes; using different orders in the two places would show the probe two different input distributions.
+
+An acceptable fallback, if the extra pass ever proves expensive in practice, is **pair-shared standardization scales**: give both members of each rotated pair $(2j, 2j+1)$ one shared scale (for example the root mean square over the pair), which makes the scaling commute with the rotation inside each pair and allows a single set of statistics for all families. Reverting to standardize-then-derotate is not an acceptable fallback.
+
+### 4.5 Family 5, `mlp_state`, `mlp_rownorm` and `mlp_randproj` (capacity controls)
 
 - `mlp_rownorm`: $8192 \to 512 \to C$ MLP with ReLU, on $\sigma$'s per-neuron row norms, that is on Study 1's `sigma_rownorm` view.
-- `mlp_randproj`: a fixed random Gaussian projection of the standardized flat $\sigma$ to 4096 dimensions (seeded per checkpoint, recorded), then $4096 \to 512 \to C$.
+- `mlp_randproj`: a fixed **sparse** random projection of the standardized flat $\sigma$ to 4096 dimensions, then $4096 \to 512 \to C$. The projection draws 64 signed nonzeros per output dimension, seeded per checkpoint. A dense Gaussian projection at this width would cost about $2.4 \times 10^4 \cdot 524{,}288 \cdot 4096 \approx 5.2 \times 10^{13}$ multiply-adds per checkpoint-level, roughly 11 h across the four caches, which is not a defensible share of the budget for a control; the very sparse form costs $6.3 \times 10^{9}$ and preserves the Johnson-Lindenstrauss property. **Reporting requirement:** the results record the projection's construction, namely the nonzeros per output dimension, the seed, and the fact that it is fixed and not learned, so the control is reproducible.
+- `mlp_state`: $F \to 512 \to C$ MLP on the standardized full state vector, with no reduction at all. This is family 5's **matched** arm: it is the only member of the family that is defined identically on all three states, and it is the arm H6 uses (section 5.1).
 
-These isolate "nonlinearity plus dimensionality reduction" from "associative structure". If a plain MLP on a rotation-invariant 8,192-dimensional summary matches the best bilinear readout, the bilinear result is about capacity and estimation, not about query addressing. Both are reshape-invariant, which matters for the baseline arms (section 5).
+These isolate "nonlinearity plus dimensionality reduction" from "associative structure". If a plain MLP on a rotation-invariant 8,192-dimensional summary matches the best bilinear readout, the bilinear result is about capacity and estimation, not about query addressing.
+
+The two reductions exist only because 524,288 is too wide to feed an MLP directly. A 1,400- or 3,520-dimensional baseline state has nothing to reduce: row norms of the LSTM reshape $[4, 350]$ would be four features, which is not a control, and projecting 1,400 up to 4,096 is an expansion. So **BDH carries the two reductions `mlp_rownorm` and `mlp_randproj`, each baseline carries none of them, and all three states carry `mlp_state`.** `mlp_state` on BDH is $524{,}288 \to 512 \to C$, about 268.5 M parameters in its first layer; the reductions are reported alongside it as BDH-only context and feed H7, while H6's family 5 comparison is `mlp_state` against `mlp_state` against `mlp_state`.
 
 ### 4.6 Family 6, `synapse_atlas` (exploratory, **not preregistered**)
 
@@ -145,7 +154,7 @@ Every preregistered family that can be defined on a baseline state is run on the
 | LSTM | `state_vec`, 1400 | one head, $[1,\ 4,\ 350]$ | `LSTMBaseline.state_vector` concatenates, per layer, $h_i$ then $c_i$ |
 | RWKV | `state_vec`, 3520 | one head, $[1,\ 20,\ 176]$ | `RWKVBaseline.state_vector` concatenates, per block, `aa, bb, pp, x_prev_timemix, x_prev_channelmix` |
 
-Each baseline matrix is treated as a single-head "sigma-like" matrix for the rank-$r$ bilinear form. `flat_linear` and the `mlp_*` families apply directly and are reshape-invariant. For families 1, 2, 3 and 5 this is a genuine matched comparison.
+Each baseline matrix is treated as a single-head "sigma-like" matrix for the rank-$r$ bilinear form. `flat_linear` and `mlp_state` apply directly to the flat state vector and are reshape-invariant. For families 1, 2, 3 and 5 this is a genuine matched comparison, with the caveat that family 5's matched member is `mlp_state` on all three states: BDH's `mlp_rownorm` and `mlp_randproj` are reductions that have no baseline counterpart (section 4.5), so they are reported as BDH-only context and are never one side of an H6 comparison.
 
 **Derotation on baselines is the identity.** Neither baseline carries a rotary phase, so there is nothing to undo; the correct matched definition of `derot_*` on a baseline state is its undecorated counterpart, and the baseline arm reuses that already-fitted probe at no extra cost. This keeps H6 well defined over all five preregistered families.
 
@@ -163,9 +172,9 @@ flowchart TD
     S2["LSTM state_vec 1400<br/>reshaped 1 x 4 x 350"]
     S3["RWKV state_vec 3520<br/>reshaped 1 x 20 x 176"]
 
-    S1 --> FB["families 1 to 5 on sigma<br/>flat, query_rank_r, shared_query_rank_r,<br/>derot variants, mlp_rownorm, mlp_randproj"]
-    S2 --> FL["families 1 to 5 on the LSTM state<br/>derot = identity"]
-    S3 --> FR["families 1 to 5 on the RWKV state<br/>derot = identity"]
+    S1 --> FB["families 1 to 5 on sigma<br/>flat, query_rank_r, shared_query_rank_r,<br/>derot variants, mlp_state<br/>+ BDH-only mlp_rownorm, mlp_randproj"]
+    S2 --> FL["families 1 to 5 on the LSTM state<br/>derot = identity, family 5 = mlp_state"]
+    S3 --> FR["families 1 to 5 on the RWKV state<br/>derot = identity, family 5 = mlp_state"]
 
     FB --> H5["H5 format and estimation<br/>best structured sigma readout<br/>minus flat_linear on sigma"]
     FB --> H6
@@ -218,6 +227,8 @@ Four BDH (checkpoint, level) feature caches in total.
 |---|---|
 | Feature extraction, 4 BDH caches plus 6 baseline states, train + streamed val + streamed test passes | about 11 to 14 h |
 | Probe fitting, all families, L2 grid, ranks, restarts | about 3 h |
+| `mlp_state` on BDH, whose first layer is 268.5 M parameters (about 6x `flat_linear`'s arithmetic per batch) | about 1 to 2 h across the four caches |
+| Derotated-frame feature statistics, one extra streaming pass over each cache | minutes: 25 GB of sequential memmap reads plus one pass of rotation arithmetic |
 | Cross-study bridge rows, `flat_linear` on 2 baseline states x 3 seeds at 61,400 pairs | minutes, immaterial to the total |
 | **Total** | roughly 1 to 1.5 days of local background wall-clock on MPS |
 | Alternative | about 3 to 4 h and 8 to 15 dollars on a rented A100 |
@@ -230,7 +241,7 @@ Three seeds. Each comparison uses each model's own best level and best hyperpara
   $$\mathrm{mean}\;\mathrm{acc}(\text{best structured } \sigma \text{ readout, families 2 to 4}) - \mathrm{mean}\;\mathrm{acc}(\texttt{flat\_linear on } \sigma) > 0.05$$
   and all three paired-by-seed differences are positive. **Supported means** Study 1's H1 failure was at least partly an artifact of readout format or parameter estimation, not an absence of belief content in $\sigma$.
 
-- **H6 (revised H1, the headline).** For the best **matched** family (families 1 to 5, each defined identically on all three states), supported iff mean acc($\sigma$) exceeds mean acc(LSTM state) by more than 5 points and mean acc(RWKV state) by more than 5 points, with all paired-by-seed differences positive in both comparisons. If the winning family is factorized and the baseline arm it beats is **saturated** in the sense of section 5.2 (effective rank fraction 1.00), that win is a rank-constraint artifact rather than evidence about associative structure: BDH is being read at a constrained rank while the baseline is effectively being read flat. H6 must therefore also be read against the reshape-free families 1 and 5, whose baseline arms cannot saturate, and the verdict states which family carried it and whether either baseline arm was saturated. **Kill criterion: if H6 fails against the LSTM state under matched families, the "sigma as a linearly or bilinearly readable belief state" line is closed. Write up and pivot to the imagination study, or abandon.**
+- **H6 (revised H1, the headline).** For the best **matched** family (families 1 to 5, each defined identically on all three states, with family 5 represented by `mlp_state`), supported iff mean acc($\sigma$) exceeds mean acc(LSTM state) by more than 5 points and mean acc(RWKV state) by more than 5 points, with all paired-by-seed differences positive in both comparisons. If the winning family is factorized and the baseline arm it beats is **saturated** in the sense of section 5.2 (effective rank fraction 1.00), that win is a rank-constraint artifact rather than evidence about associative structure: BDH is being read at a constrained rank while the baseline is effectively being read flat. H6 must therefore also be read against the reshape-free families 1 and 5, whose baseline arms cannot saturate, and the verdict states which family carried it and whether either baseline arm was saturated. **Kill criterion: if H6 fails against the LSTM state under matched families, the "sigma as a linearly or bilinearly readable belief state" line is closed. Write up and pivot to the imagination study, or abandon.**
 
 - **H7 (attribution, reported not gated).** Compare `mlp_rownorm` against the best structured $\sigma$ readout. If the MLP is within 2 points of it or better, attribute any gain to capacity and nonlinearity rather than to associative structure. This rule reports an attribution; it gates nothing.
 
@@ -248,7 +259,7 @@ New:
 
 | item | content |
 |---|---|
-| `hbwm/probes/structured.py` | One `nn.Module` per family, each mapping a standardized flat feature row `[B, F]` to class logits `[B, C]`, so `predict_proba_stream` and the existing joint-L2 training loop work unmodified. Holds the reshape table of section 5.1, the derotation, the restart logic, per-family parameter counts, and the saturation point and effective rank fraction of section 5.2 |
+| `hbwm/probes/structured.py` | One `nn.Module` per family, each mapping a flat feature row `[B, F]` to class logits `[B, C]` and standardizing internally, so `predict_proba_stream` and the existing joint-L2 training loop work unmodified. Holds the reshape table of section 5.1, the derotation and its derotated-frame feature statistics (section 4.4), the restart logic, per-family parameter counts, the sparse random projection and its recorded construction, and the saturation point and effective rank fraction of section 5.2 |
 | `--families` selector in `hbwm/probes/run.py` | Chooses which families to fit for a given checkpoint-level; the default is the Study 2 preregistered set |
 | Row context in the runner | The derotated families need each row's absolute token position. `predict_proba_stream` already yields the pair indices, so the runner passes a per-row `t` array alongside the features; families that ignore it are unaffected |
 | `h8_latency` in `hbwm/probes/decisions.py` | New function: rebaselines the clock to $t_0$, excludes episodes with no $t_0$ from the denominator, and returns the excluded count, the excluded fraction, and the low-coverage flag. `h3_latency` is left untouched so Study 1 stays reproducible |
@@ -267,6 +278,8 @@ All tests run on CPU with tiny configs in seconds; TDD throughout, tests written
 | rank-$r$ expressivity | a `query_rank_r` probe with $r = \min(N, D)$ and unconstrained parameters matches an unconstrained linear probe on a tiny config (same data, same objective, `atol` on the achieved training loss) |
 | oracle and null | oracle features (one-hot last-seen cell) give 100% for every family; shuffled labels give chance for every family |
 | derotation | derotation is invertible to floating-point tolerance (`derot(derot_inverse(x)) == x`, `atol=1e-5`); derotation of a $\sigma$ built from a single write at step $s$, read at step $t$, has phase $s - t$; `derot_flat_linear` differs from `flat_linear` on data with mixed $t$ |
+| derotation order | derotate-then-standardize differs from standardize-then-derotate whenever the two members of a rotated pair carry different scales, and agrees when they share a scale (the pair-shared fallback); a derotated family's fitted statistics are the derotated-frame ones, and the identical order is used in fitting and in the streamed passes |
+| family 5 matched arm | `mlp_state` instantiates on all three states with the state's own width; `mlp_rownorm` and `mlp_randproj` exist only on BDH and are never selected as an H6 arm |
 | baseline reshapes | LSTM 1400 reshapes to `[1, 4, 350]` and RWKV 3520 to `[1, 20, 176]` with the asserted shapes and the orderings that `state_vector` actually emits (asserted against the modules, not hard-coded) |
 | matched-family contract | every preregistered family instantiates on all three state shapes; `derot_*` on a baseline is the same object as its undecorated counterpart |
 | parameter counts | `flat_linear` 42,467,328; `query_rank_r` $684{,}288 r$; `shared_query_rank_r` $28{,}928 r$, all excluding biases, asserted against the modules |
@@ -296,8 +309,9 @@ All tests run on CPU with tiny configs in seconds; TDD throughout, tests written
 | A structured family wins on BDH **and** on both baselines, leaving H6 unchanged | This is a real and reasonably likely outcome and is named in advance. It would mean the associative readout is a better probe generally, not evidence about $\sigma$. H6 is within-family precisely so this outcome is legible rather than confusing |
 | Memory and disk pressure repeating Study 1's Jetsam kill | The hygiene already in `hbwm/probes/run.py`: one checkpoint-level at a time, `release_memory` at stage boundaries, memmap flush and close, `[mem]` RSS logging, `try`/`finally` cache deletion, matrix-level orphan-cache cleanup. 25 GB of scratch disk must be free before each cache |
 | The study becomes a fishing expedition | Exactly four preregistered rules; families and rank grid fixed before implementation; everything else labeled exploratory and unable to decide anything |
+| `mlp_state` on BDH has 268.5 M first-layer parameters against 24,000 training examples and will overfit hard | That is what the L2 grid selected on `probe_val` is for, and the overfitting is itself the informative content of the control: it says what an unstructured high-capacity readout can and cannot extract at this budget. Its parameter count and train accuracy are reported next to its test accuracy so the reader can see it |
 | Nonconvex bilinear objective silently underfits and flatters the convex control | Three restarts per factorized family and L2, best on `probe_val`, with per-restart accuracy recorded; train accuracy reported per family |
-| The baseline reshape is architecturally arbitrary (rows are not "neurons" for an LSTM or RWKV the way they are for $\sigma$) and could handicap or flatter the baselines | Named as a limitation. Families 1 and 5 are reshape-invariant, so the H6 headline is checked against at least one reshape-free family before any conclusion is drawn |
+| The baseline reshape is architecturally arbitrary (rows are not "neurons" for an LSTM or RWKV the way they are for $\sigma$) and could handicap or flatter the baselines | Named as a limitation. `flat_linear` and family 5's matched arm `mlp_state` both act on the flat state vector and are reshape-invariant, so the H6 headline is checked against at least one reshape-free family before any conclusion is drawn |
 | The reshape also sets where a factorized family **saturates**, so the same $r$ is a real rank constraint for BDH (16 of 64) and no constraint at all for the LSTM (4 of 4). A BDH win over a saturated baseline arm would be a rank-constraint artifact | Section 5.2 preregisters the saturation points, requires the effective rank fraction next to every factorized number, and requires H6 to name the carrying family and flag any saturated baseline arm. Families 1 and 5 cannot saturate and are the fallback reading |
 | The RWKV state mixes a log-domain component (`pp`) with linear ones in the same reshaped matrix | Study 1's per-feature standardization is applied first and is unchanged, so scales are comparable before any bilinear contraction; the mixing is recorded as a caveat |
 | Selecting rank, L2, restart, level and family all on `probe_val` inflates the winner | `probe_val` is 1,000 held-out episodes disjoint from `probe_train` and `probe_test`; every reported number is on `probe_test`; the selection budget per model is stated in RESULTS.md so the reader can discount it |
@@ -331,7 +345,8 @@ Excluding the $C$ biases, which every family shares.
 | `flat_linear`, `derot_flat_linear` | $C\, n_h N D$ | 42,467,328 |
 | `query_rank_r`, `derot_query_rank_r` | $C\, n_h\, r\,(N + D)$ | 684,288 per unit rank: 684,288 / 2,737,152 / 10,948,608 at $r = 1 / 4 / 16$ |
 | `shared_query_rank_r` | $n_h r N + C\, n_h r D$ | 28,928 per unit rank: 28,928 / 115,712 / 462,848 at $r = 1 / 4 / 16$ |
-| `mlp_rownorm` | $8192 \cdot 512 + 512 \cdot C$ | 4,235,776 |
-| `mlp_randproj` | $4096 \cdot 512 + 512 \cdot C$ (projection is fixed, not learned) | 2,138,624 |
+| `mlp_rownorm` (BDH only) | $8192 \cdot 512 + 512 \cdot C$ | 4,235,776 |
+| `mlp_randproj` (BDH only) | $4096 \cdot 512 + 512 \cdot C$ (projection is fixed, not learned) | 2,138,624 |
+| `mlp_state` (matched, all three states) | $F \cdot 512 + 512 \cdot C$ | BDH 268,476,928; LSTM 758,272; RWKV 1,843,712 |
 | LSTM matched arms | same formulas with $n_h = 1$, $N = 4$, $D = 350$ | `flat_linear` 113,400; `query_rank_1` 28,674 |
 | RWKV matched arms | same formulas with $n_h = 1$, $N = 20$, $D = 176$ | `flat_linear` 285,120; `query_rank_1` 15,876 |
