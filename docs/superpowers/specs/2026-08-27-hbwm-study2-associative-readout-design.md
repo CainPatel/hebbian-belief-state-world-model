@@ -109,6 +109,30 @@ Study 1's recipe is held verbatim where it can be: per-feature standardization, 
 
 Train accuracy is reported per family alongside test accuracy, so underfitting is visible rather than inferred.
 
+### 4.8 Descriptive structure of $\sigma$ (exploratory, **not preregistered**)
+
+Not a probe family: a set of descriptive measurements of the state itself, run once per selected checkpoint-level alongside the probe work because the features are already being extracted. **These decide nothing.** No threshold below is a criterion, and no result here can support or refute H5 to H8.
+
+**Why they matter.** The repo owner asked whether $\sigma$ is sparse, and Study 1 never answered that: H4 asked the narrower question of whether the *decodable* signal concentrates in few features under a flat linear probe, and found it does not (median `k90` = 524,288, the full feature count). H4's negative is entangled with H1's negative, because the feature ranking it used came from a probe that only reached 0.101 accuracy, so "no sparse decodable subset" and "no decodable signal to concentrate" are not separated by that result. Structural sparsity and a concept-aligned neuron basis are exactly what the readability bet assumes, so measuring them directly says whether the premise holds independently of how well any probe reads it.
+
+Let $\sigma \in \mathbb{R}^{n_h \times N \times D}$ be one level's state at the feature timestep, **unstandardized** (these are properties of the state, not of a probe's input space), with $n_h = 4$, $N = 2048$, $D = 64$.
+
+| # | measurement | definition | reported |
+|---|---|---|---|
+| 1 | Row-norm sparsity | $a_n = \|\sigma[h, n, :]\|_2^2$ over the $N$ neuron rows, per head | Distribution of $\|\sigma[h,n,:]\|_2$ (deciles, min, max); fraction of rows below 1% and below 10% of the row-norm max; participation ratio $\mathrm{PR} = (\sum_n a_n)^2 / \sum_n a_n^2$, an effective count of neurons carrying mass, out of 2048 |
+| 2 | Effective rank | Singular values $s_1 \ge \ldots \ge s_D$ of each $[N, D]$ head matrix (at most $D = 64$ are nonzero) | Number of components reaching 90% and 99% of the squared Frobenius mass $\sum_i s_i^2$, out of 64; participation ratio $(\sum_i s_i^2)^2 / \sum_i s_i^4$; the mean normalized spectrum |
+| 3 | Activation sparsity | `x_sparse` at the same timesteps, from `Internals` | ReLU zero fraction per head, and its distribution across examples. Contrast only: it says how sparse the *write key* is, not how sparse the accumulated state is |
+| 4 | Write concentration | $w[h, n] = \sum_{s<t} \gamma^{2(t-1-s)}\, q_s[h,n]^2\, \|x_s\|_2^2$, the squared write mass routed into row $n$, accumulated over the same recorder pass ($q_s$ is already formed inside `step`, so this costs one extra $[n_h, N]$ accumulator per level) | Share of $\sum_n w[h,n]$ in the top 1% (20 of 2048 rows, floor) and top 10% (204 rows), rows ranked by $w$. The ratio of measurement 1's $\sum a$ to $\sum w$ is a cancellation index: above 1 when successive writes into a row align, below 1 when they cancel |
+| 5 | Atlas selectivity | For neuron $(h, n)$ at this level, its token-conditional mean activation profile $m_v = \bar{x}_\ell(v)[h, n]$ over the tokens with nonzero `token_counts` (33 of the 34 vocabulary entries, since `PAD` is unused), normalized to $p_v = m_v / \sum_v m_v$ (well defined because `x_sparse` is a ReLU output, so $m_v \ge 0$) | Distribution over neurons of max-share $\max_v p_v$ and of normalized entropy $H(p) / \ln 33$; the fraction of neurons with max-share above 0.5. A concept-aligned basis shows a heavy tail of low-entropy, high-max-share neurons; a distributed basis does not |
+
+**Measurement 5 needs an atlas change.** `hbwm/instrument/atlas.py`'s `build_atlas` computes the token-conditional mean `tok_mean` of shape $[L, V, n_h, N]$ internally but saves only `tok_mean.topk(32).indices` to `atlas.json`, so the full profile is not on disk. The measurement therefore either extends `build_atlas` with an optional return of `tok_mean`, or recomputes it with the identical 500-episode `probe_train` sample. Either way the atlas sample and `top_m` stay as Study 1 had them, so the existing `atlas.json` remains valid and unchanged.
+
+**Sampling and cost.** Measurements 1, 2 and 4 are per example. They are computed on a fixed seeded random subsample of 1,024 of the cached `probe_train` rows per checkpoint-level, not all 24,000, because measurement 2 needs one SVD of a $2048 \times 64$ matrix per head per example; 1,024 rows is 4,096 SVDs and costs seconds, while 24,000 rows would cost roughly 25x that for no additional resolution on a distribution. Distributions are reported as median with the 10th and 90th percentiles across the subsample. Measurements 3 and 5 are aggregates over the sample already being streamed.
+
+**Output.** `<run_dir>/probes/sigma_structure_L<level>.json`, one file per checkpoint-level, plus a summary block in `RESULTS.md` under an explicit exploratory heading.
+
+**Note on timing.** A preliminary version of measurements 1 to 4 is being run now against the $\gamma = 1.0$ seed 0 checkpoint, ahead of this specification being implemented. Those numbers will be quoted in `RESULTS.md` as exploratory and preliminary, labeled with the checkpoint and level they came from, and they do not constitute the measurement specified here.
+
 ## 5. Fairness: matched families on the baselines
 
 ### 5.1 Reshape and matched definitions
@@ -214,7 +238,7 @@ Three seeds. Each comparison uses each model's own best level and best hyperpara
   **Undefined case.** $t_0$ need not exist: the agent can stay adjacent to the moved object from `reobserved_t` through the end of the episode, which is reachable because `reobserved_t` can fall close to $L = 96$. Episodes with no $t_0$ are **excluded from the denominator**, because no belief-revision test is possible when the answer never leaves the agent's window. They are not counted as failures. The excluded count and the excluded fraction of moved-and-re-observed episodes are reported next to the statistic, and if exclusions exceed 25% of moved-and-re-observed episodes the H8 result is reported but flagged as low-coverage.
   RESULTS.md's exploratory not-visible-steps-only column (bdh_g100 0.130, lstm 0.838, rwkv 0.845) is the closest existing reference point, but it filters steps without rebaselining the clock and is therefore not the same statistic.
 
-**Explicitly exploratory and not preregistered:** family 6, per-bucket accuracy curves for the structured families, and any per-head, per-level, or per-rank analysis beyond the `probe_val` selection the rules above require.
+**Explicitly exploratory and not preregistered:** family 6, the descriptive structure measurements of section 4.8, per-bucket accuracy curves for the structured families, and any per-head, per-level, or per-rank analysis beyond the `probe_val` selection the rules above require.
 
 ## 8. Reuse and new code
 
@@ -229,7 +253,8 @@ New:
 | Row context in the runner | The derotated families need each row's absolute token position. `predict_proba_stream` already yields the pair indices, so the runner passes a per-row `t` array alongside the features; families that ignore it are unaffected |
 | `h8_latency` in `hbwm/probes/decisions.py` | New function: rebaselines the clock to $t_0$, excludes episodes with no $t_0$ from the denominator, and returns the excluded count, the excluded fraction, and the low-coverage flag. `h3_latency` is left untouched so Study 1 stays reproducible |
 | `h5_decision`, `h6_decision`, `h7_attribution` in `decisions.py` | Pure functions over numbers, in the style of `h1_decision`. `h6_decision` also returns the carrying family and whether either baseline arm was saturated |
-| `experiments/probes/study2.json` | The Study 2 probe preset: family list, rank grid, restart count, checkpoint-level table, bridge-row budget |
+| `hbwm/instrument/structure.py` | The five exploratory measurements of section 4.8, plus the optional `tok_mean` return that measurement 5 needs from `build_atlas`. Writes `<run_dir>/probes/sigma_structure_L<level>.json`. Decides nothing, so a failure here must never cost the preregistered probe results (same `try`/`except` containment `run.py` already uses for the atlas) |
+| `experiments/probes/study2.json` | The Study 2 probe preset: family list, rank grid, restart count, checkpoint-level table, bridge-row budget, structure-measurement subsample size |
 
 Study 1's standardization, L2 grid, bootstrap CI, and bucket definitions are kept verbatim so cross-study comparison stays legitimate.
 
@@ -248,6 +273,7 @@ All tests run on CPU with tiny configs in seconds; TDD throughout, tests written
 | rank saturation | the computed saturation points and effective rank fractions match section 5.2 for all three reshapes; a `query_rank_r` probe at $r \ge \min(P, Q)$ reaches the same training loss as `flat_linear` on a tiny config, and the reported fraction is 1.00 and clipped |
 | H8 coverage | an episode visible from `reobserved_t` through $L$ has no $t_0$ and is **excluded** from the denominator, not counted as a failure; an episode with a $t_0$ that never flips is counted as a failure; the excluded count and fraction are reported and the low-coverage flag trips above 25% |
 | decisions | `h5`, `h6`, `h7`, `h8` on hand-built inputs, including the paired-positivity edge cases, the never-flips-counts-as-failure case, and H6's saturated-baseline-arm flag |
+| structure measurements | closed-form checks on synthetic $\sigma$: a one-hot row gives participation ratio 1.0, uniform rows give 2048.0; a rank-1 matrix needs 1 component for 99% of Frobenius mass and a matrix of $D$ equal singular values needs 64; a one-hot token profile gives max-share 1.0 and normalized entropy 0.0, a flat profile gives max-share $1/33$ and entropy 1.0; a structure-measurement exception does not abort the probe run |
 | smoke | end-to-end on the tiny fixture: 8 episodes, a few train steps per model, record states, fit every family, evaluate H5 to H8, all on CPU |
 
 ## 10. Milestones and definition of done
@@ -257,8 +283,8 @@ All tests run on CPU with tiny configs in seconds; TDD throughout, tests written
 | M1 | `structured.py` family definitions, parameter-count and expressivity tests, derotation and its tests | rank-$r$ expressivity, derotation, and parameter-count tests green |
 | M2 | Baseline reshapes, matched-family contract, saturation and effective-rank reporting, `--families` selector, row-context plumbing | matched-family, reshape and rank-saturation tests green; a family fits on all three state shapes |
 | M3 | `h5` to `h8` decision functions, `experiments/probes/study2.json`, evaluate-side aggregation | decision tests green, including the H8 coverage cases; smoke test green; `evaluate` produces a Study 2 table from the tiny fixture |
-| M4 | README Study 2 preregistration commit, hash recorded in RESULTS.md | commit exists and precedes every Study 2 run |
-| M5 | Feature caches and probe fits for all 9 checkpoints, bridge rows, then aggregation, tables, figures | every checkpoint-level in section 6 complete; H5 to H8 decided by the stated rules; parameter counts, `n_train`, and effective rank fraction reported per family; H8 coverage reported |
+| M4 | `hbwm/instrument/structure.py`, the five exploratory measurements of section 4.8, wired into the probe runner behind failure containment | structure-measurement tests green; a `sigma_structure_L<level>.json` is produced from the tiny fixture; an induced failure leaves the probe results intact |
+| M5 | README Study 2 preregistration commit, then feature caches and probe fits for all 9 checkpoints, bridge rows, aggregation, tables, figures, write-up | preregistration commit exists and precedes every Study 2 run; every checkpoint-level in section 6 complete; H5 to H8 decided by the stated rules; parameter counts, `n_train`, and effective rank fraction reported per family; H8 coverage reported; section 4.8 measurements reported under an exploratory heading |
 
 **Study 2 is done** when M5's exit criterion holds, positive or negative.
 
