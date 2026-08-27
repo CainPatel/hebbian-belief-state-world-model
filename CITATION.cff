@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+title: "Hebbian Belief-State World Model (HBWM): Study 1"
+message: "If you use this software or its results, please cite it as below."
+type: software
+authors:
+  - family-names: Patel
+    given-names: Cain
+repository-code: "https://github.com/CainPatel/hebbian-belief-state-world-model"
+url: "https://github.com/CainPatel/hebbian-belief-state-world-model"
+abstract: >-
+  Study 1 asks whether the plastic synapse state sigma of a BDH ("the Dragon
+  Hatchling") core encodes linearly readable beliefs about a partially observed
+  9x9 gridworld. Three parameter-matched sequence models (BDH, LSTM, RWKV) are
+  trained to predict observations, their internal states are read out with
+  standardized linear probes, and four hypotheses (H1 to H4) are decided under
+  rules preregistered before any run. The result is a preregistered negative
+  one: H1 failed and its kill criterion fired.
+keywords:
+  - interpretability
+  - world models
+  - belief states
+  - Hebbian plasticity
+  - BDH
+  - Dragon Hatchling
+  - linear probes
+  - preregistration
+license: MIT
+date-released: "2026-08-27"
