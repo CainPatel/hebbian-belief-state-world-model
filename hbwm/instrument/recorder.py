@@ -12,7 +12,7 @@ class SigmaRecorder:
     @torch.no_grad()
     def run(self, tokens, positions=None, fn=None, plasticity: str = "full"):
         """payload['sigma'] (and the internals) alias the live state, which the next step() mutates in
-        place — index or clone inside the callback; never store the tensor itself."""
+        place: index or clone inside the callback; never store the tensor itself."""
         self.model.eval()
         B, T = tokens.shape
         want = None if positions is None else {int(p) for p in positions}

@@ -39,7 +39,7 @@ def _log_mem(tag: str) -> None:
 
 def _stage_boundary(tag: str, device=None) -> None:
     """Between recorder passes: return what the finished stage no longer holds, then log the high-water
-    mark. Purely hygiene — nothing still referenced is touched, so results are unaffected."""
+    mark. Purely hygiene: nothing still referenced is touched, so results are unaffected."""
     release_memory(device)
     _log_mem(tag)
 
@@ -67,7 +67,7 @@ class ProbeConfig:
 
 PRESETS = {
     # batch_eps=32 (not the 64 default): smaller recorder passes bound the peak device footprint of a
-    # Study 1 checkpoint. Grouping only — every pair is still extracted exactly once, and each row is
+    # Study 1 checkpoint. Grouping only: every pair is still extracted exactly once, and each row is
     # written back by index, so the features and every downstream number are unchanged.
     "study1": ProbeConfig(batch_eps=32),
     "smoke": ProbeConfig(small_features=["sigma_rownorm"], per_obj=2, l2_grid=[1e-3], epochs=2, n_train_full=50,
