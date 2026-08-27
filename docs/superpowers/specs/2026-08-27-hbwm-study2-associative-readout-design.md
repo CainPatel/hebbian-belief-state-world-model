@@ -16,7 +16,7 @@
 | 2 | Hypothesis family | Bilinear (low-rank) readouts matching `yKV[h,d] = sum_n q[h,n] sigma[h,n,d]` | The architecture reads $\sigma$ by contracting a sparse positive query against the neuron axis. A readout with that access pattern is the natural test |
 | 3 | Honesty about the family | These are **structured linear** readouts, not nonlinear ones | The parameterization is factorized; the score is still linear in $\sigma$. Family 5 separates capacity and nonlinearity from associative structure |
 | 4 | Fairness | Every preregistered family runs on the LSTM and RWKV states too | Otherwise Study 2 compares BDH's best readout against the baselines' worst, which is the failure mode that would invalidate the headline |
-| 5 | Training-set symmetry | Every family, every model, trains on the **same 24,000-pair** stratified subsample | Removes Study 1's 24,000 vs 61,400 asymmetry from the within-study comparison. Study 1's 61,400 baseline numbers are reported alongside as the cross-study reference |
+| 5 | Training-set symmetry | Every family, every model, trains on the **same 24,000-pair** stratified subsample; `flat_linear` on both baseline states is additionally refit at 61,400 pairs as a bridge row | Removes Study 1's 24,000 vs 61,400 asymmetry from the within-study comparison. The bridge rows give continuity with Study 1 without quoting numbers across protocols (section 5.1), and decide nothing |
 | 6 | Scope | 9 checkpoints (bdh_g100, lstm, rwkv, seeds 0 to 2), 4 BDH checkpoint-level feature caches | The gamma arms are excluded: Study 1 showed them uniformly weaker and gamma-per-token confounds them |
 | 7 | Number of preregistered rules | Exactly four (H5 to H8) | The whole point of a pivot is that it must not become a fishing expedition |
 
@@ -111,6 +111,8 @@ Train accuracy is reported per family alongside test accuracy, so underfitting i
 
 ## 5. Fairness: matched families on the baselines
 
+### 5.1 Reshape and matched definitions
+
 Every preregistered family that can be defined on a baseline state is run on the LSTM and RWKV states. The reshape is preregistered here:
 
 | model | state | matrix form | source of the ordering |
@@ -122,6 +124,8 @@ Every preregistered family that can be defined on a baseline state is run on the
 Each baseline matrix is treated as a single-head "sigma-like" matrix for the rank-$r$ bilinear form. `flat_linear` and the `mlp_*` families apply directly and are reshape-invariant. For families 1, 2, 3 and 5 this is a genuine matched comparison.
 
 **Derotation on baselines is the identity.** Neither baseline carries a rotary phase, so there is nothing to undo; the correct matched definition of `derot_*` on a baseline state is its undecorated counterpart, and the baseline arm reuses that already-fitted probe at no extra cost. This keeps H6 well defined over all five preregistered families.
+
+**Cross-study bridge rows.** Study 2 additionally refits `flat_linear` on both baseline states at the full 61,400-pair budget, alongside the matched 24,000-pair fit. Study 1's baseline probe checkpoints cost 74 to 280 s each, so this is minutes of extra work, and it removes any dependence on quoting Study 1 numbers across protocols: Study 2 adds restarts and a `--families` code path that Study 1 did not have, so a Study 1 number and a Study 2 number are not produced by identical machinery even at the same budget. The bridge rows are reported for continuity only. **They are not used by any decision rule**, and the H6 comparison remains the matched 24,000-pair one.
 
 ```mermaid
 flowchart TD
@@ -149,6 +153,25 @@ flowchart TD
     S1 -.-> X["family 6 synapse_atlas<br/>exploratory, BDH only, decides nothing"]
 ```
 
+### 5.2 Rank saturation and the effective rank fraction
+
+A matched family can match in name but not in constraint. For a state reshaped to $[P, Q]$, a factorized readout's implied weight $W_c$ satisfies $\mathrm{rank}(W_c) \le r$, so:
+
+- `query_rank_r` is expressivity-equivalent to `flat_linear` once $r \ge \min(P, Q)$.
+- `shared_query_rank_r` needs $r \ge P$, because the shared query basis must span the row space before the per-class values can reach an arbitrary $W_c$.
+
+At or beyond that point the factorized family is not a rank-constrained readout at all; it is `flat_linear` in a different parameterization, fitted by a different optimizer (restarts, a nonconvex path, and an L2 penalty on the factors rather than on $W$). The preregistered grid $r \in \{1, 4, 16\}$ therefore means something different for each model:
+
+| model | matrix $[P, Q]$ | `query_rank_r` saturates at | `shared_query_rank_r` saturates at | effective rank fraction $r / \min(P, Q)$ at $r = 1 / 4 / 16$ |
+|---|---|---|---|---|
+| BDH, per head | $[2048,\ 64]$ | $r = 64$ | $r = 2048$ | 0.02 / 0.06 / 0.25 |
+| LSTM | $[4,\ 350]$ | $r = 4$ | $r = 4$ | 0.25 / **1.00** / **1.00** |
+| RWKV | $[20,\ 176]$ | $r = 20$ | $r = 20$ | 0.05 / 0.20 / 0.80 |
+
+For BDH even $r = 16$ is a genuine constraint (16 of 64). For the LSTM, `query_rank_4` and `query_rank_16` are both already saturated, and so are the corresponding `shared_query_rank_r` arms. RWKV is unsaturated across the whole grid but close to it at $r = 16$.
+
+**Preregistered reporting requirement.** Every factorized number in the results tables carries its effective rank fraction $r / \min(P, Q)$, clipped at 1.00, and a fraction of 1.00 marks the arm as saturated. `shared_query_rank_r` uses the same $\min(P, Q)$ denominator so that the two factorized families are read on one scale; its own saturation point is the $P$ column above, which coincides with $\min(P, Q)$ for both baselines and exceeds it only for BDH, where the grid tops out at $r = 16$ and no arm saturates either way. Saturated arms are still fitted and still reported; they are simply labeled for what they are.
+
 ## 6. Scope, compute, and cost
 
 **Checkpoints (9).** `bdh_g100`, `lstm`, `rwkv` at lr 0.003, seeds {0, 1, 2}. The gamma arms are excluded from the headline: Study 1 showed them uniformly weaker on every probe hypothesis, and the RESULTS.md caveat that gamma applies per token rather than per environment step ($\gamma^{12}$ per step) means they are confounded as memory-horizon manipulations.
@@ -171,6 +194,7 @@ Four BDH (checkpoint, level) feature caches in total.
 |---|---|
 | Feature extraction, 4 BDH caches plus 6 baseline states, train + streamed val + streamed test passes | about 11 to 14 h |
 | Probe fitting, all families, L2 grid, ranks, restarts | about 3 h |
+| Cross-study bridge rows, `flat_linear` on 2 baseline states x 3 seeds at 61,400 pairs | minutes, immaterial to the total |
 | **Total** | roughly 1 to 1.5 days of local background wall-clock on MPS |
 | Alternative | about 3 to 4 h and 8 to 15 dollars on a rented A100 |
 
@@ -182,11 +206,13 @@ Three seeds. Each comparison uses each model's own best level and best hyperpara
   $$\mathrm{mean}\;\mathrm{acc}(\text{best structured } \sigma \text{ readout, families 2 to 4}) - \mathrm{mean}\;\mathrm{acc}(\texttt{flat\_linear on } \sigma) > 0.05$$
   and all three paired-by-seed differences are positive. **Supported means** Study 1's H1 failure was at least partly an artifact of readout format or parameter estimation, not an absence of belief content in $\sigma$.
 
-- **H6 (revised H1, the headline).** For the best **matched** family (families 1 to 5, each defined identically on all three states), supported iff mean acc($\sigma$) exceeds mean acc(LSTM state) by more than 5 points and mean acc(RWKV state) by more than 5 points, with all paired-by-seed differences positive in both comparisons. **Kill criterion: if H6 fails against the LSTM state under matched families, the "sigma as a linearly or bilinearly readable belief state" line is closed. Write up and pivot to the imagination study, or abandon.**
+- **H6 (revised H1, the headline).** For the best **matched** family (families 1 to 5, each defined identically on all three states), supported iff mean acc($\sigma$) exceeds mean acc(LSTM state) by more than 5 points and mean acc(RWKV state) by more than 5 points, with all paired-by-seed differences positive in both comparisons. If the winning family is factorized and the baseline arm it beats is **saturated** in the sense of section 5.2 (effective rank fraction 1.00), that win is a rank-constraint artifact rather than evidence about associative structure: BDH is being read at a constrained rank while the baseline is effectively being read flat. H6 must therefore also be read against the reshape-free families 1 and 5, whose baseline arms cannot saturate, and the verdict states which family carried it and whether either baseline arm was saturated. **Kill criterion: if H6 fails against the LSTM state under matched families, the "sigma as a linearly or bilinearly readable belief state" line is closed. Write up and pivot to the imagination study, or abandon.**
 
 - **H7 (attribution, reported not gated).** Compare `mlp_rownorm` against the best structured $\sigma$ readout. If the MLP is within 2 points of it or better, attribute any gain to capacity and nonlinearity rather than to associative structure. This rule reports an attribution; it gates nothing.
 
-- **H8 (belief revision, revised H3).** Using the best $\sigma$ readout, latency is measured from $t_0(\text{episode}) = \min\{t \ge \texttt{reobserved\_t} : \text{the object is not visible at } t\}$, that is from the first step after re-observation at which the object is **not** visible, rather than from the re-observation step itself at which the answer is inside the agent's 3x3 window. Latency is the first $t \ge t_0$ with $p(\text{new cell}) > p(\text{old cell})$, minus $t_0$; episodes that never flip count as failures. Supported iff latency is 5 steps or less in at least 70% of moved-and-re-observed episodes. RESULTS.md's exploratory not-visible-steps-only column (bdh_g100 0.130, lstm 0.838, rwkv 0.845) is the closest existing reference point, but it filters steps without rebaselining the clock and is therefore not the same statistic.
+- **H8 (belief revision, revised H3).** Using the best $\sigma$ readout, latency is measured from $t_0(\text{episode}) = \min\{t \ge \texttt{reobserved\_t} : \text{the object is not visible at } t\}$, that is from the first step after re-observation at which the object is **not** visible, rather than from the re-observation step itself at which the answer is inside the agent's 3x3 window. Latency is the first $t \ge t_0$ with $p(\text{new cell}) > p(\text{old cell})$, minus $t_0$; episodes that have a $t_0$ but never flip continue to count as failures. Supported iff latency is 5 steps or less in at least 70% of the episodes in the denominator.
+  **Undefined case.** $t_0$ need not exist: the agent can stay adjacent to the moved object from `reobserved_t` through the end of the episode, which is reachable because `reobserved_t` can fall close to $L = 96$. Episodes with no $t_0$ are **excluded from the denominator**, because no belief-revision test is possible when the answer never leaves the agent's window. They are not counted as failures. The excluded count and the excluded fraction of moved-and-re-observed episodes are reported next to the statistic, and if exclusions exceed 25% of moved-and-re-observed episodes the H8 result is reported but flagged as low-coverage.
+  RESULTS.md's exploratory not-visible-steps-only column (bdh_g100 0.130, lstm 0.838, rwkv 0.845) is the closest existing reference point, but it filters steps without rebaselining the clock and is therefore not the same statistic.
 
 **Explicitly exploratory and not preregistered:** family 6, per-bucket accuracy curves for the structured families, and any per-head, per-level, or per-rank analysis beyond the `probe_val` selection the rules above require.
 
@@ -198,12 +224,12 @@ New:
 
 | item | content |
 |---|---|
-| `hbwm/probes/structured.py` | One `nn.Module` per family, each mapping a standardized flat feature row `[B, F]` to class logits `[B, C]`, so `predict_proba_stream` and the existing joint-L2 training loop work unmodified. Holds the reshape table of section 5, the derotation, the restart logic, and per-family parameter counts |
+| `hbwm/probes/structured.py` | One `nn.Module` per family, each mapping a standardized flat feature row `[B, F]` to class logits `[B, C]`, so `predict_proba_stream` and the existing joint-L2 training loop work unmodified. Holds the reshape table of section 5.1, the derotation, the restart logic, per-family parameter counts, and the saturation point and effective rank fraction of section 5.2 |
 | `--families` selector in `hbwm/probes/run.py` | Chooses which families to fit for a given checkpoint-level; the default is the Study 2 preregistered set |
 | Row context in the runner | The derotated families need each row's absolute token position. `predict_proba_stream` already yields the pair indices, so the runner passes a per-row `t` array alongside the features; families that ignore it are unaffected |
-| `h8_latency` in `hbwm/probes/decisions.py` | New function. `h3_latency` is left untouched so Study 1 stays reproducible |
-| `h5_decision`, `h6_decision`, `h7_attribution` in `decisions.py` | Pure functions over numbers, in the style of `h1_decision` |
-| `experiments/probes/study2.json` | The Study 2 probe preset: family list, rank grid, restart count, checkpoint-level table |
+| `h8_latency` in `hbwm/probes/decisions.py` | New function: rebaselines the clock to $t_0$, excludes episodes with no $t_0$ from the denominator, and returns the excluded count, the excluded fraction, and the low-coverage flag. `h3_latency` is left untouched so Study 1 stays reproducible |
+| `h5_decision`, `h6_decision`, `h7_attribution` in `decisions.py` | Pure functions over numbers, in the style of `h1_decision`. `h6_decision` also returns the carrying family and whether either baseline arm was saturated |
+| `experiments/probes/study2.json` | The Study 2 probe preset: family list, rank grid, restart count, checkpoint-level table, bridge-row budget |
 
 Study 1's standardization, L2 grid, bootstrap CI, and bucket definitions are kept verbatim so cross-study comparison stays legitimate.
 
@@ -219,7 +245,9 @@ All tests run on CPU with tiny configs in seconds; TDD throughout, tests written
 | baseline reshapes | LSTM 1400 reshapes to `[1, 4, 350]` and RWKV 3520 to `[1, 20, 176]` with the asserted shapes and the orderings that `state_vector` actually emits (asserted against the modules, not hard-coded) |
 | matched-family contract | every preregistered family instantiates on all three state shapes; `derot_*` on a baseline is the same object as its undecorated counterpart |
 | parameter counts | `flat_linear` 42,467,328; `query_rank_r` $684{,}288 r$; `shared_query_rank_r` $28{,}928 r$, all excluding biases, asserted against the modules |
-| decisions | `h5`, `h6`, `h7`, `h8` on hand-built inputs, including the paired-positivity edge cases and the never-flips-counts-as-failure case |
+| rank saturation | the computed saturation points and effective rank fractions match section 5.2 for all three reshapes; a `query_rank_r` probe at $r \ge \min(P, Q)$ reaches the same training loss as `flat_linear` on a tiny config, and the reported fraction is 1.00 and clipped |
+| H8 coverage | an episode visible from `reobserved_t` through $L$ has no $t_0$ and is **excluded** from the denominator, not counted as a failure; an episode with a $t_0$ that never flips is counted as a failure; the excluded count and fraction are reported and the low-coverage flag trips above 25% |
+| decisions | `h5`, `h6`, `h7`, `h8` on hand-built inputs, including the paired-positivity edge cases, the never-flips-counts-as-failure case, and H6's saturated-baseline-arm flag |
 | smoke | end-to-end on the tiny fixture: 8 episodes, a few train steps per model, record states, fit every family, evaluate H5 to H8, all on CPU |
 
 ## 10. Milestones and definition of done
@@ -227,10 +255,10 @@ All tests run on CPU with tiny configs in seconds; TDD throughout, tests written
 | M | content | exit criterion |
 |---|---|---|
 | M1 | `structured.py` family definitions, parameter-count and expressivity tests, derotation and its tests | rank-$r$ expressivity, derotation, and parameter-count tests green |
-| M2 | Baseline reshapes, matched-family contract, `--families` selector, row-context plumbing | matched-family and reshape tests green; a family fits on all three state shapes |
-| M3 | `h5` to `h8` decision functions, `experiments/probes/study2.json`, evaluate-side aggregation | decision tests green; smoke test green; `evaluate` produces a Study 2 table from the tiny fixture |
+| M2 | Baseline reshapes, matched-family contract, saturation and effective-rank reporting, `--families` selector, row-context plumbing | matched-family, reshape and rank-saturation tests green; a family fits on all three state shapes |
+| M3 | `h5` to `h8` decision functions, `experiments/probes/study2.json`, evaluate-side aggregation | decision tests green, including the H8 coverage cases; smoke test green; `evaluate` produces a Study 2 table from the tiny fixture |
 | M4 | README Study 2 preregistration commit, hash recorded in RESULTS.md | commit exists and precedes every Study 2 run |
-| M5 | Feature caches and probe fits for all 9 checkpoints, then aggregation, tables, figures | every checkpoint-level in section 6 complete; H5 to H8 decided by the stated rules; parameter counts and `n_train` reported per family |
+| M5 | Feature caches and probe fits for all 9 checkpoints, bridge rows, then aggregation, tables, figures | every checkpoint-level in section 6 complete; H5 to H8 decided by the stated rules; parameter counts, `n_train`, and effective rank fraction reported per family; H8 coverage reported |
 
 **Study 2 is done** when M5's exit criterion holds, positive or negative.
 
@@ -244,6 +272,7 @@ All tests run on CPU with tiny configs in seconds; TDD throughout, tests written
 | The study becomes a fishing expedition | Exactly four preregistered rules; families and rank grid fixed before implementation; everything else labeled exploratory and unable to decide anything |
 | Nonconvex bilinear objective silently underfits and flatters the convex control | Three restarts per factorized family and L2, best on `probe_val`, with per-restart accuracy recorded; train accuracy reported per family |
 | The baseline reshape is architecturally arbitrary (rows are not "neurons" for an LSTM or RWKV the way they are for $\sigma$) and could handicap or flatter the baselines | Named as a limitation. Families 1 and 5 are reshape-invariant, so the H6 headline is checked against at least one reshape-free family before any conclusion is drawn |
+| The reshape also sets where a factorized family **saturates**, so the same $r$ is a real rank constraint for BDH (16 of 64) and no constraint at all for the LSTM (4 of 4). A BDH win over a saturated baseline arm would be a rank-constraint artifact | Section 5.2 preregisters the saturation points, requires the effective rank fraction next to every factorized number, and requires H6 to name the carrying family and flag any saturated baseline arm. Families 1 and 5 cannot saturate and are the fallback reading |
 | The RWKV state mixes a log-domain component (`pp`) with linear ones in the same reshaped matrix | Study 1's per-feature standardization is applied first and is unchanged, so scales are comparable before any bilinear contraction; the mixing is recorded as a caveat |
 | Selecting rank, L2, restart, level and family all on `probe_val` inflates the winner | `probe_val` is 1,000 held-out episodes disjoint from `probe_train` and `probe_test`; every reported number is on `probe_test`; the selection budget per model is stated in RESULTS.md so the reader can discount it |
 
