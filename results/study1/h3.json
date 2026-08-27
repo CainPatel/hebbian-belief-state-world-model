@@ -1,0 +1,247 @@
+{
+  "bdh_g100": {
+    "per_seed": {
+      "0": {
+        "spec": "sigma_full_L3",
+        "n_episodes": 622,
+        "n_flipped": 202,
+        "median_latency": 4.0,
+        "frac_le5": 0.18167202572347266,
+        "supported": false,
+        "exploratory_not_visible": {
+          "n_episodes": 605,
+          "n_flipped": 192,
+          "median_latency": 5.0,
+          "frac_le5": 0.16033057851239668
+        }
+      },
+      "1": {
+        "spec": "sigma_full_L3",
+        "n_episodes": 622,
+        "n_flipped": 176,
+        "median_latency": 5.5,
+        "frac_le5": 0.1414790996784566,
+        "supported": false,
+        "exploratory_not_visible": {
+          "n_episodes": 605,
+          "n_flipped": 166,
+          "median_latency": 7.0,
+          "frac_le5": 0.10743801652892562
+        }
+      },
+      "2": {
+        "spec": "sigma_full_L4",
+        "n_episodes": 622,
+        "n_flipped": 170,
+        "median_latency": 5.0,
+        "frac_le5": 0.14790996784565916,
+        "supported": false,
+        "exploratory_not_visible": {
+          "n_episodes": 605,
+          "n_flipped": 161,
+          "median_latency": 6.0,
+          "frac_le5": 0.12231404958677686
+        }
+      }
+    },
+    "mean_frac_le5": 0.15702036441586278,
+    "supported": false,
+    "mean_frac_le5_not_visible": 0.13002754820936638
+  },
+  "bdh_g099": {
+    "per_seed": {
+      "0": {
+        "spec": "sigma_full_L3",
+        "n_episodes": 622,
+        "n_flipped": 427,
+        "median_latency": 7.0,
+        "frac_le5": 0.3135048231511254,
+        "supported": false,
+        "exploratory_not_visible": {
+          "n_episodes": 605,
+          "n_flipped": 404,
+          "median_latency": 8.0,
+          "frac_le5": 0.23471074380165288
+        }
+      },
+      "1": {
+        "spec": "sigma_full_L3",
+        "n_episodes": 622,
+        "n_flipped": 394,
+        "median_latency": 7.0,
+        "frac_le5": 0.2733118971061093,
+        "supported": false,
+        "exploratory_not_visible": {
+          "n_episodes": 605,
+          "n_flipped": 378,
+          "median_latency": 8.0,
+          "frac_le5": 0.21487603305785125
+        }
+      },
+      "2": {
+        "spec": "sigma_full_L3",
+        "n_episodes": 622,
+        "n_flipped": 422,
+        "median_latency": 6.0,
+        "frac_le5": 0.3135048231511254,
+        "supported": false,
+        "exploratory_not_visible": {
+          "n_episodes": 605,
+          "n_flipped": 406,
+          "median_latency": 7.0,
+          "frac_le5": 0.24462809917355371
+        }
+      }
+    },
+    "mean_frac_le5": 0.30010718113612006,
+    "supported": false,
+    "mean_frac_le5_not_visible": 0.23140495867768593
+  },
+  "bdh_g097": {
+    "per_seed": {
+      "0": {
+        "spec": "sigma_full_L3",
+        "n_episodes": 622,
+        "n_flipped": 480,
+        "median_latency": 6.0,
+        "frac_le5": 0.35691318327974275,
+        "supported": false,
+        "exploratory_not_visible": {
+          "n_episodes": 605,
+          "n_flipped": 462,
+          "median_latency": 9.0,
+          "frac_le5": 0.2727272727272727
+        }
+      },
+      "1": {
+        "spec": "sigma_full_L3",
+        "n_episodes": 622,
+        "n_flipped": 470,
+        "median_latency": 7.0,
+        "frac_le5": 0.3360128617363344,
+        "supported": false,
+        "exploratory_not_visible": {
+          "n_episodes": 605,
+          "n_flipped": 454,
+          "median_latency": 8.0,
+          "frac_le5": 0.27107438016528923
+        }
+      },
+      "2": {
+        "spec": "sigma_full_L3",
+        "n_episodes": 622,
+        "n_flipped": 472,
+        "median_latency": 6.0,
+        "frac_le5": 0.3633440514469453,
+        "supported": false,
+        "exploratory_not_visible": {
+          "n_episodes": 605,
+          "n_flipped": 455,
+          "median_latency": 7.0,
+          "frac_le5": 0.2859504132231405
+        }
+      }
+    },
+    "mean_frac_le5": 0.3520900321543408,
+    "supported": false,
+    "mean_frac_le5_not_visible": 0.2765840220385675
+  },
+  "lstm": {
+    "per_seed": {
+      "0": {
+        "spec": "state_vec",
+        "n_episodes": 622,
+        "n_flipped": 611,
+        "median_latency": 1.0,
+        "frac_le5": 0.9372990353697749,
+        "supported": true,
+        "exploratory_not_visible": {
+          "n_episodes": 605,
+          "n_flipped": 600,
+          "median_latency": 3.0,
+          "frac_le5": 0.8314049586776859
+        }
+      },
+      "1": {
+        "spec": "state_vec",
+        "n_episodes": 622,
+        "n_flipped": 611,
+        "median_latency": 1.0,
+        "frac_le5": 0.9421221864951769,
+        "supported": true,
+        "exploratory_not_visible": {
+          "n_episodes": 605,
+          "n_flipped": 603,
+          "median_latency": 3.0,
+          "frac_le5": 0.8413223140495868
+        }
+      },
+      "2": {
+        "spec": "state_vec",
+        "n_episodes": 622,
+        "n_flipped": 607,
+        "median_latency": 1.0,
+        "frac_le5": 0.9405144694533762,
+        "supported": true,
+        "exploratory_not_visible": {
+          "n_episodes": 605,
+          "n_flipped": 601,
+          "median_latency": 3.0,
+          "frac_le5": 0.8413223140495868
+        }
+      }
+    },
+    "mean_frac_le5": 0.939978563772776,
+    "supported": true,
+    "mean_frac_le5_not_visible": 0.8380165289256198
+  },
+  "rwkv": {
+    "per_seed": {
+      "0": {
+        "spec": "state_vec",
+        "n_episodes": 622,
+        "n_flipped": 617,
+        "median_latency": 1.0,
+        "frac_le5": 0.9598070739549839,
+        "supported": true,
+        "exploratory_not_visible": {
+          "n_episodes": 605,
+          "n_flipped": 602,
+          "median_latency": 3.0,
+          "frac_le5": 0.8429752066115702
+        }
+      },
+      "1": {
+        "spec": "state_vec",
+        "n_episodes": 622,
+        "n_flipped": 612,
+        "median_latency": 1.0,
+        "frac_le5": 0.9405144694533762,
+        "supported": true,
+        "exploratory_not_visible": {
+          "n_episodes": 605,
+          "n_flipped": 600,
+          "median_latency": 3.0,
+          "frac_le5": 0.8396694214876033
+        }
+      },
+      "2": {
+        "spec": "state_vec",
+        "n_episodes": 622,
+        "n_flipped": 616,
+        "median_latency": 1.0,
+        "frac_le5": 0.9598070739549839,
+        "supported": true,
+        "exploratory_not_visible": {
+          "n_episodes": 605,
+          "n_flipped": 603,
+          "median_latency": 3.0,
+          "frac_le5": 0.8512396694214877
+        }
+      }
+    },
+    "mean_frac_le5": 0.9533762057877814,
+    "supported": true,
+    "mean_frac_le5_not_visible": 0.8446280991735536
+  }
+}
