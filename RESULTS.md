@@ -115,3 +115,31 @@ Selected best LR per model (lowest best_val_ce): **bdh_g100 → 0.003** (0.0240)
 **Wall-clock varies ~2× across runs:** the machine alternated between lid-closed dark-wake throttling (~0.23–0.27 steps/s BDH) and awake operation.
 
 **E1 notes:** all 9 `final.json` files present; all `best_val_ce` values finite (range 0.0235–0.0496); no divergence observed.
+
+## E2/E3 — seeds and γ arms
+
+Source: `runs/study1/{bdh_g100,lstm,rwkv,bdh_g099,bdh_g097}_lr0.003/seed{0,1,2}/final.json`.
+All twelve headline runs use lr 0.003: `runs/study1/best_lr.json` selected 3e-3 for all three
+models (`{"bdh_g100": 0.003, "lstm": 0.003, "rwkv": 0.003}`), and the γ arms inherit the primary
+BDH learning rate by the preregistered protocol. `bdh_g100_lr0.003/seed0` is shared with the E1
+sweep and is not re-run.
+
+| phase | model / γ arm | seed 0 | seed 1 | seed 2 | mean best val CE |
+|---|---|---|---|---|---|
+| E2 | bdh_g100 (γ = 1.00) | 0.0240 | 0.0252 | 0.0232 | 0.0242 |
+| E2 | lstm | 0.0286 | 0.0275 | 0.0290 | 0.0284 |
+| E2 | rwkv | 0.0235 | 0.0243 | 0.0237 | 0.0238 |
+| E3 | bdh_g099 (γ = 0.99) | 0.0242 | 0.0244 | 0.0246 | 0.0244 |
+| E3 | bdh_g097 (γ = 0.97) | 0.0268 | 0.0272 | 0.0264 | 0.0268 |
+
+All 15 runs reached step 4000 with a finite `best_val_ce`; `best_step` is 4000 everywhere except
+`bdh_g100_lr0.003/seed1` and `bdh_g097_lr0.003/seed0`, whose best eval landed at step 3800. Spread
+across seeds is small for every arm (max within-arm range 0.0020 nats, for bdh_g100). Parameter
+counts are unchanged from E1: 1,577,216 for every BDH arm, 1,579,310 for the LSTM, 1,631,168 for
+RWKV.
+
+**Wall-clock:** BDH arms ran at 0.117–0.256 steps/s (15,635–34,269 s per seed), LSTM at
+5.67–5.72 steps/s (about 700 s per seed), RWKV at 0.465–0.501 steps/s (7,981–8,606 s per seed).
+The outlier is `bdh_g099_lr0.003/seed2` at 34,268.5 s (0.117 steps/s), roughly twice the wall-clock
+of its sibling seeds; this is the lid-closed dark-wake throttling described under E1, not a
+difference in the run itself. Its `best_val_ce` (0.0246) is in line with seeds 0 and 1.
