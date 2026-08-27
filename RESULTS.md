@@ -441,6 +441,11 @@ to 1.0) neutralizes exactly those, leaving on the order of **26,000 effective fe
 estimation story is weakened, not eliminated: 88 per example is still a harder regime than any
 comparator faced.
 
+That 88 inherits every caveat above. It descends from a row occupancy measured on **one checkpoint,
+at one level, over 64 episodes**, so treat the magnitude as indicative and the direction as the point.
+The direction survives any plausible revision of the occupancy figure; the exact number does not
+deserve the confidence that a two-digit figure invites.
+
 ### (b) Probe errors are spatially local
 
 **Method.** Reads only saved probe outputs,

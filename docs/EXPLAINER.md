@@ -490,14 +490,19 @@ accuracy, plus the last level), so the peak is roughly **75 GB of scratch disk**
 
 **Fourth code-versus-spec divergence, flagged as promised.** The Study 1 design spec says the
 `sigma_full` train cache is written "one level at a time (about 25 GB per level, deleted after use)".
-The code does not do that. Sharing one recorder pass across all three levels is the obvious reason to
-write it this way, and the code's own comments record the per-level size, but the three-level peak is
-not what the spec budgets for. As everywhere else in this document, the code wins.
+The code does not do that, and this was a **deliberate implementation-time decision, not an
+oversight**: it was raised in review, accepted on disk-capacity grounds (three times 25 GB against
+3.2 TB free, and faster because it needs one recorder pass instead of three), and the spec was simply
+never amended to match. As everywhere else in this document, the code wins.
 
-That three-level peak is the likely cause of the memory incident RESULTS.md already reports under its
-wall-clock caveats: "One probe run was OOM-killed and re-run after memory fixes." Anyone rerunning
-the matrix should budget for the three-level peak, or pass an explicit single-level `full_levels` and
-accept the extra recorder passes.
+**The instructive part is how the decision was framed.** It was weighed as a *disk* question, and on
+disk it was the right call. It did not consider *memory* pressure, and that is exactly where it went
+wrong: three concurrently open 25 GB memmaps, plus the recorder's own allocations on top, are what
+fed the memory incident RESULTS.md reports under its wall-clock caveats, "One probe run was OOM-killed
+and re-run after memory fixes." A cache sized against free disk can still be the thing that gets a
+job killed, because the pages it dirties are resident before they are written back. Anyone rerunning
+the matrix should budget for the three-level peak in RAM as well as on disk, or pass an explicit
+single-level `full_levels` and accept the extra recorder passes.
 
 ---
 
@@ -659,7 +664,13 @@ as approximately zero and contribute almost nothing to the fit. The effective fe
 to **26,000**, giving about $26{,}000 \times 81 / 24{,}000 \approx \mathbf{88}$ effective free
 parameters per example. That is still worse than any comparator's budget, and 88 per example is still
 a hard regime for a flat probe, but it is a factor of twenty milder than 1,770. The estimation story
-is **weakened, not eliminated**, and the honest number to quote is 88, not 1,770.
+is **weakened, not eliminated**.
+
+Quote that 88 with its provenance attached. The 5% row occupancy it descends from is measured on one
+checkpoint, at one level, over 64 episodes, so **treat the magnitude as indicative and the direction
+as the point**. The direction is what carries the argument, and it survives any plausible revision of
+the occupancy figure: at twice the measured occupancy the effective budget is about 177 per example
+and at half it is about 44, both a long way from the 1,770 that counting all 524,288 columns implies.
 
 **The corroborating clue.** `sigma_rownorm` reaches 0.172 against `sigma_full`'s 0.101, on a feature
 set 64 times smaller, and lands level with the LSTM state's 0.171. The row-norm view is a
