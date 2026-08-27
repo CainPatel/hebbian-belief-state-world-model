@@ -10,27 +10,37 @@ Proposal: [SPEC.md](SPEC.md) &middot; Buildable design: [docs/superpowers/specs/
 
 ---
 
-## Status (2026-08-25)
+## Status (2026-08-27): Study 1 is complete
+
+**Outcome: a preregistered negative result.** The linear probe reads an out-of-view object's cell
+out of BDH's synapse state $\sigma$ at 0.101, *below* the LSTM state's 0.171 and the RWKV state's
+0.218, so H1 fails and the preregistered kill criterion ("H1 fails against the LSTM state") fired.
+H2 passes for $\gamma = 1.0$ only and passes weakly; H3 and H4 are not supported for any BDH arm.
+BDH still out-predicts the LSTM on test CE, so the null is about *format*, not about a broken model.
+Full numbers and decisions in **[RESULTS.md](RESULTS.md)**; the long-form account of what it means in
+**[docs/EXPLAINER.md](docs/EXPLAINER.md)**.
 
 | Phase | State |
 |---|---|
-| Implementation | Complete. 111 tests pass (CPU, tiny configs). |
+| Implementation | Complete. 115 tests pass (CPU, tiny configs). |
 | Dataset `grid9` | Generated: 27,000 episodes, 1,164 tokens each. |
 | E0 sanity, calibration | Done ([RESULTS.md](RESULTS.md)). |
 | E1 LR sweep (9 runs) | Complete. Best LR = 3e-3 for all three model families. |
 | E2 seeds (6 runs) | Complete. |
-| E3 gamma arms (6 runs) | 4 of 6 done. `gamma = 0.97` seeds 1 and 2 in flight. |
-| Probe phase | Pending. |
-| H1 to H4 verdicts | Pending. |
+| E3 gamma arms (6 runs) | Complete. 21 of 21 training runs done. |
+| Probe phase | Complete. 15 of 15 checkpoints probed, evaluation aggregated. |
+| H1 to H4 verdicts | Decided. H1 not supported (kill criterion fired), H2 passes for $\gamma = 1.0$ only, H3 and H4 not supported for BDH. |
+| Post-hoc analyses | Three exploratory follow-ups recorded in [RESULTS.md](RESULTS.md); scripts in [`analysis/posthoc/`](analysis/posthoc/). They change no preregistered decision. |
+| Study 2 | Designed, not run. See [docs/EXPLAINER.md](docs/EXPLAINER.md) section 9. |
 
-**Provisional best validation CE (nats/observation token), all at lr 3e-3.**
+**Best validation CE (nats/observation token), all at lr 3e-3.**
 Uniform-prior chance is $\ln 34 \approx 3.53$ nats.
 
 | Model / arm | seed 0 | seed 1 | seed 2 |
 |---|---|---|---|
 | BDH, gamma = 1.00 | 0.0240 | 0.0252 | 0.0232 |
 | BDH, gamma = 0.99 | 0.0242 | 0.0244 | 0.0246 |
-| BDH, gamma = 0.97 | 0.0268 | pending | pending |
+| BDH, gamma = 0.97 | 0.0268 | 0.0272 | 0.0264 |
 | LSTM | 0.0286 | 0.0275 | 0.0290 |
 | RWKV | 0.0235 | 0.0243 | 0.0237 |
 
@@ -342,7 +352,8 @@ Each run writes `runs/<exp>/<model>_lr<lr>/seed<S>/{config.json, metrics.jsonl, 
 | `hbwm/` | `train.py`, `matrix.py` (experiment matrix CLI), `models.py`, `config.py`, `device.py`, `losses.py`, `sanity_shakespeare.py` |
 | `experiments/` | `data/grid9.json`, `train/{bdh_g100,bdh_g099,bdh_g097,lstm,rwkv}.json` |
 | `notebooks/` | `belief_heatmaps.ipynb`, `sigma_decay.ipynb` (exploratory; read only from `runs/`) |
-| `tests/` | 111 tests, all CPU, tiny configs, seconds to run |
+| `analysis/posthoc/` | `sigma_structure.py`, `spatial_locality.py`, `spatial_locality_buckets.py` (post-hoc, exploratory; read only from `runs/` and `data/`) |
+| `tests/` | 115 tests, all CPU, tiny configs, seconds to run |
 
 `data/` and `runs/` are gitignored. The research proposal is [SPEC.md](SPEC.md); the buildable specification that governs Study 1 is [`docs/superpowers/specs/2026-08-22-hbwm-study1-design.md`](docs/superpowers/specs/2026-08-22-hbwm-study1-design.md).
 
