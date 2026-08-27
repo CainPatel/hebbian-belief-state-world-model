@@ -8,7 +8,9 @@ computation you can redo in three lines of Python. Where the design specs and th
 the code wins, and the disagreement is flagged.
 
 Study 1 produced a preregistered negative result. That is the honest headline, and section 8 states
-it plainly before offering any interpretation.
+it plainly before offering any interpretation. Section 8 also carries three post-hoc findings added
+after the study closed, clearly labeled as exploratory; they change no preregistered decision, but
+they do change how the negative result should be read.
 
 ---
 
@@ -23,8 +25,10 @@ BDH, "the Dragon Hatchling" ([pathwaycom/bdh](https://github.com/pathwaycom/bdh)
 here at commit `2b0d7a45b058d4309c84a10e0768d541fe18bdc2`), holds its memory differently. Its
 per-token computation projects a small dense residual into a large, sparse, strictly nonnegative
 space whose coordinates behave like firing units, and its memory accumulates as an outer product of
-those units with a value vector. That is a Hebbian update: the state is a matrix whose entries grow
-when two things are active together, rather than a vector whose entries are overwritten by a gate.
+those units with a value vector. That is a Hebbian update: the state is a matrix that accumulates a
+signed outer product of what is active with what is being carried, rather than a vector whose
+entries are overwritten by a gate. (Sections 3 and 4 give the exact write; "grow together" is the
+right intuition but the wrong arithmetic, because the value factor is signed.)
 Crucially, the axis those memories are indexed by is not a learned key projection; it is the model's
 own activation code, which is why it is even plausible that its entries mean something.
 
@@ -82,10 +86,12 @@ $$\text{score}(t, s) \;=\; \langle R(t)\,u_t,\; R(s)\,u_s \rangle \;=\; \langle 
 where $R(\cdot)$ is the RoPE rotation. Note what the rotation buys: $u_t$ and $u_s$ are both
 nonnegative, so without it every score would be nonnegative and attention could only ever add. The
 rotation is the sole source of sign and of position dependence in the interaction. `get_freqs`
-quantizes frequencies in pairs with $\theta = 2^{16}$, so a head's coordinates span an enormous
-range of angular speeds: the fastest pair turns 1.0 radian per token, about 185 full turns across a
-1,164-token episode, while 1,082 of the 2,048 coordinates do not complete even one turn over the
-whole episode. Part of the neuron axis is a fast clock and part of it is nearly static.
+quantizes frequencies in pairs with $\theta = 2^{16}$, and the resulting `Attention.freqs` buffer has
+shape `[1, 1, 1, N]`, so **every head uses the identical frequency schedule**; the variation is along
+the neuron axis, not across heads. That axis spans an enormous range of angular speeds: the fastest
+pair turns 1.0 radian per token, about 185 full turns across a 1,164-token episode, while 1,082 of
+the 2,048 coordinates do not complete even one turn over the whole episode. Part of the neuron axis
+is a fast clock and part of it is nearly static.
 
 **The attention itself.** In the parallel path, `scores = (QR @ QR.mT) * decay_mask` and
 `y = scores @ V`. Three things to notice:
@@ -180,8 +186,23 @@ $$\sigma_t \;=\; \sum_{s<t} \gamma^{\,t-1-s}\, k_s \otimes v_s
 
 That is the Hebbian rule. Read before you write at each step and you reproduce `tril(diagonal=-1)`
 exactly, because $\sigma_t$ contains only contributions from $s < t$. `HBWMCore.step` implements
-precisely this, in that order, with a `plasticity` knob on the write ($\alpha = 1$ for `full`, 0 for
-`frozen`, arbitrary for `scaled`) that Study 1 never uses at anything but `full`.
+precisely this, in that order, with a `plasticity` knob that Study 1 never uses at anything but
+`full`.
+
+**The knob gates the whole update by mode, not by $\alpha$.** This is easy to get wrong, so state it
+exactly as `hbwm/bdh/core.py::step` has it. The mode picks
+$\alpha \in \{1.0\ (\texttt{full}),\ 0.0\ (\texttt{frozen}),\ \text{arbitrary}\ (\texttt{scaled})\}$,
+but the decay-and-write block is guarded by `if plasticity != "frozen"`:
+
+- `frozen` skips the block **entirely**, so $\sigma$ is left bit-identical to its value on entry:
+  no decay and no write. The belief is held, not merely frozen against new evidence.
+- `full` and `scaled` both apply `sigma.mul_(gamma)` first, then add $\alpha\,(q \otimes x)$. So
+  `scaled` with `plasticity_scale = 0.0` still decays $\sigma$ by $\gamma$ even though it writes
+  nothing, which is a different state from `frozen` whenever $\gamma < 1$.
+
+At $\gamma = 1$ the two conventions coincide, which is why
+`tests/test_core_step.py::test_plasticity_modes_gamma_0_9` exists: it pins all three behaviors at
+$\gamma = 0.9$, where they are distinguishable.
 
 **Shapes, plainly.** With $k_s$ living in neuron space and $v_s$ in residual space, $\sigma$ is
 $[n_h = 4,\ N = 2048,\ D = 64]$ per level. `init_state` allocates
@@ -209,16 +230,23 @@ tensor you can index. If the two paths were not the same function, every probe n
 a model that was never trained. So the repo pins them together with tests
 (`tests/test_core_forward.py`, `tests/test_core_step.py`, CPU, fp32, tiny config, eval mode):
 
-| check | tolerance |
-|---|---|
-| `HBWMCore.forward` at $\gamma = 1$, shared layers, vs. unmodified upstream `BDH.forward` | bit-identical (`torch.equal`) |
-| `forward` logits vs. sequential `step()` logits, $\gamma \in \{1.0,\ 0.9\}$ | `atol = 1e-4` |
-| $\sigma$ after $t$ steps vs. the closed form above, $\gamma = 0.8$ | `atol = 1e-5` |
-| `frozen` leaves $\sigma$ untouched | bit-identical |
-| `scaled` with scale $s$ produces exactly $s$ times the `full` write | `atol = 1e-6` |
-| the vendored `bdh.py` file hash vs. the hash recorded in `UPSTREAM.md` | exact |
+| check | test | tolerance |
+|---|---|---|
+| `HBWMCore.forward` at $\gamma = 1$, shared layers, vs. unmodified upstream `BDH.forward` | `test_core_forward.py::test_forward_bit_identical_to_upstream_at_gamma_1` | bit-identical (`torch.equal`) |
+| `forward` logits vs. sequential `step()` logits, $\gamma \in \{1.0,\ 0.9\}$ | `test_core_step.py::test_step_matches_forward` | `atol = 1e-4` at **both** $\gamma$ values |
+| $\sigma$ after $t$ steps vs. the closed form above, $\gamma = 0.8$ | `test_core_step.py::test_sigma_closed_form` | `atol = 1e-5` |
+| `frozen` leaves $\sigma$ untouched, decay included | `test_core_step.py::test_plasticity_modes_gamma_0_9` | bit-identical |
+| `scaled` with scale $s$ produces exactly $s$ times the `full` write, on top of the same decay | `test_core_step.py::test_plasticity_modes_gamma_0_9` | `atol = 1e-6` |
+| the vendored `bdh.py` file hash vs. the hash recorded in `UPSTREAM.md` | `test_upstream.py::test_upstream_file_unmodified` | exact |
 
 The last row is what keeps "upstream, untouched" from being a claim in prose.
+
+Note that the first two rows are **different pairs of paths** and it is worth not collapsing them.
+Row 1 compares this repo's parallel `forward` against upstream's parallel `forward`; that one is
+bit-identical, and only at $\gamma = 1$. Row 2 compares this repo's parallel `forward` against this
+repo's recurrent `step()`; that one is a floating-point agreement at `atol = 1e-4`, at $\gamma = 1.0$
+and $\gamma = 0.9$ alike. There is no bit-identical parallel-versus-recurrent claim anywhere, and
+there could not be: the two paths contract the same sums in different orders.
 
 **The decay knob.** Upstream has no forgetting: the state is a pure sum and RoPE rotates without
 damping. Hypothesis H2 needs a horizon knob, so `HBWMCore` adds $\gamma$ through the decay mask
@@ -291,13 +319,24 @@ $\sigma$ is **content-addressable memory, not a picture**. That distinction is t
 Study 1 could fail without the architecture being wrong.
 
 The repo's exploratory tooling makes this explicit rather than hiding it. `hbwm/instrument/atlas.py`
-builds a "concept atlas" by recording, for each token, the top-32 neurons per head by mean
-`x_sparse` when that token is read. `hbwm/instrument/belief.py` then renders a belief map by summing
-entries of the low-rank synapse view $\tilde\sigma$ between the atlas rows for cell $(x, y)$ and the
-atlas columns for `OBJ_k`, plus the transposed term. That is a *hypothesis* about which index sets
-carry the association, not a structural guarantee. Nothing in training makes those the right rows
-and columns. `belief.py` says so in its own module docstring, and the heatmaps it produces are
-labeled exploratory and not preregistered.
+builds a "concept atlas" with **two** index sets per level, not one: a `token` atlas, the top-32
+neurons per head by mean `x_sparse` when a given token is read, and a `cell` atlas, the top-32
+neurons per head by mean `x_sparse` when the agent is standing on a given grid cell at the end of an
+observation. `hbwm/instrument/belief.py` then renders a belief map by summing entries of the low-rank
+synapse view $\tilde\sigma$ between the **cell** atlas rows for $(x, y)$ and the **token** atlas
+columns for `OBJ_k`, plus the transposed term.
+
+That is a *hypothesis* about which index sets carry the association, not a structural guarantee.
+Nothing in training makes those the right rows and columns. `belief.py` says so in its own module
+docstring, and the heatmaps it produces are labeled exploratory and not preregistered.
+
+**Third code-versus-spec divergence, flagged as promised.** The Study 1 design spec specifies token
+atlases on both axes of the belief map. The code uses the per-cell atlas for the row axis. The code
+wins, as everywhere else in this document, but the heatmaps in section 8 should be read as the
+per-cell construction, which is a strictly different object from the one the spec describes. (The
+other divergences are the absent `materialize=True` argument on `synapse()`, the `OBJ_0..OBJ_3`
+versus `OBJ_1..OBJ_4` token naming, and the `sigma_full` feature cache in section 6, which the spec
+budgets one level at a time and the code opens all at once.)
 
 ---
 
@@ -310,7 +349,7 @@ episode. Every choice below is stated with what would have gone wrong without it
 | choice | rationale | what would have gone wrong |
 |---|---|---|
 | 9x9 grid, 81 cells | the probe target is a single 81-way classification, and `sweep` covers every cell in at most 96 moves | a bigger grid makes exhaustive coverage impossible in 96 steps, so "never seen" and "forgotten" become confounded |
-| 3x3 window | partial observability is the entire reason a belief state is needed; the agent sees 9 of 81 cells at a time | full observability leaves nothing to remember and the study has no subject |
+| 3x3 window | partial observability is the entire reason a belief state is needed; the agent sees at most 9 of 81 cells at a time, and fewer when it stands on an edge or in a corner, where the out-of-grid window slots are emitted as `WALL` | full observability leaves nothing to remember and the study has no subject |
 | 3 objects of **distinct** types, drawn from 4 | "the object of type $k$" names a unique object, so the probe label is unambiguous | with repeated types the label would be ambiguous, and a probe failure could be a labeling artifact rather than a memory result |
 | agent's absolute $(x, y)$ in every observation | isolates object memory from self-localization | without it, a failed probe could always be blamed on the model not knowing where *it* is, and the hypothesis would never get a clean shot |
 | static objects | ground truth is unambiguous, and the oracle-memory baseline (predict the last-seen cell) is exactly 1.000 by construction | drifting objects put the ceiling below 1 and make every accuracy number relative to a moving reference |
@@ -324,10 +363,15 @@ episode. Every choice below is stated with what would have gone wrong without it
 uniformly from $[\lceil 0.25 L \rceil, \lfloor 0.75 L \rfloor] = [24, 72]$, one object that is *not
 currently in view* teleports to a uniformly random empty cell that is *also* out of view. At most
 one move per episode, and the agent receives no signal until it re-observes the object. Measured on
-the 2,000-episode `probe_test` split: 0.5205 of episodes contain a move, and in 0.311 the moved
-object is re-observed before the episode ends. Those re-observed episodes are the ones H3 scores.
+the 2,000-episode `probe_test` split: 1,041 episodes contain a move (**0.5205** of all episodes), and
+the moved object is re-observed before the episode ends in 622 of them. That is **0.311 of all
+episodes** and **622 / 1041 = 0.598 of moved episodes**; the two denominators are easy to confuse and
+only the second is the conditional re-observation rate. Those 622 re-observed episodes are the ones
+H3 scores.
 
-**Tokenization.** The vocabulary is 34 tokens and does not depend on grid size:
+**Tokenization.** The vocabulary is 34 tokens and is grid-size independent up to `MAX_G = 11`
+(`hbwm/envs/tokenizer.py` reserves `X_0..X_10` and `Y_0..Y_10`, so a grid larger than 11x11 would
+need a larger vocabulary):
 `BOS`, `PAD` (reserved, unused), `A_N/A_E/A_S/A_W`, `X_0..X_10`, `Y_0..Y_10`, `EMPTY`, `WALL`,
 `OBJ_0..OBJ_3`. Note the object tokens are `OBJ_0` through `OBJ_3` in the code
 (`OBJ_BASE = 30`, ids 30 to 33); the Study 1 design spec calls them `OBJ_1..OBJ_4` and is stale.
@@ -416,7 +460,7 @@ model including baselines is the last token of observation $o_t$):
 | name | dims | meaning |
 |---|---|---|
 | `sigma_full` | $n_h N D = 524{,}288$ | the flattened synapse state at one level |
-| `sigma_rownorm` | $n_h N = 8{,}192$ | L2 norm of each neuron's $D$-vector row of $\sigma$, a "synaptic load" summary that discards rotational phase entirely |
+| `sigma_rownorm` | $n_h N = 8{,}192$ | L2 norm of each neuron's $D$-vector row of $\sigma$, a "synaptic load" summary that is largely insensitive to rotational phase (exactly phase-invariant only for the sum of squared row norms across a rotated coordinate *pair*, as spelled out in section 8) |
 | `x_sparse` | $n_h N = 8{,}192$ | the activations-only ablation |
 | `resid` | $D = 64$ | the residual stream, a floor |
 | `state_vec` (LSTM) | 1,400 | `concat(h_1, c_1, h_2, c_2)` |
@@ -431,10 +475,29 @@ features is not affordable. Best level is always chosen on `probe_val`.
 
 **The budget asymmetry, stated up front.** Feature sets of at most 16k dims use all 61,400
 `probe_train` pairs, cached in RAM. `sigma_full` trains on a **stratified 24,000-example
-subsample**, cached as an fp16 memmap one level at a time (about 25 GB of scratch, deleted in a
-`finally` block), with validation and test streamed so those features are never cached. The
-asymmetry was preregistered, is visible in the `n_train` column of every results table, and is one
-of the three candidate explanations for the negative result in section 8.
+subsample**, cached as fp16 memmaps on disk (deleted in a `finally` block), with validation and test
+streamed so those features are never cached. The asymmetry was preregistered, is visible in the
+`n_train` column of every results table, and is one of the three candidate explanations for the
+negative result in section 8.
+
+**How much scratch that actually is, and the incident it caused.** Not one level at a time. In
+`hbwm/probes/run.py` the `sigma_full` stage calls `fit_and_eval_stage` **once**, with every selected
+level in `specs_full` and `memmap_specs=tuple(specs_full)`, and `collect_many` opens one memmap per
+spec up front and fills them all in the same streaming pass over the recorder. So every selected
+level's cache is open concurrently. One level is $24{,}000 \times 524{,}288$ fp16, about **25 GB**;
+Study 1 selects three levels under `full_levels="auto"` (the two best by `sigma_rownorm` validation
+accuracy, plus the last level), so the peak is roughly **75 GB of scratch disk**, not 25.
+
+**Fourth code-versus-spec divergence, flagged as promised.** The Study 1 design spec says the
+`sigma_full` train cache is written "one level at a time (about 25 GB per level, deleted after use)".
+The code does not do that. Sharing one recorder pass across all three levels is the obvious reason to
+write it this way, and the code's own comments record the per-level size, but the three-level peak is
+not what the spec budgets for. As everywhere else in this document, the code wins.
+
+That three-level peak is the likely cause of the memory incident RESULTS.md already reports under its
+wall-clock caveats: "One probe run was OOM-killed and re-run after memory fixes." Anyone rerunning
+the matrix should budget for the three-level peak, or pass an explicit single-level `full_levels` and
+accept the extra recorder passes.
 
 ---
 
@@ -446,13 +509,13 @@ out.
 | control | the alternative explanation it kills | outcome |
 |---|---|---|
 | Parameter-matched LSTM ($H = 350$, 1,579,310 params, +0.13%) and RWKV ($C = 176$, 1,631,168, +3.42%), both inside the preregistered +/- 5% band | "0.10 is just what anything gets on this task; the task is too hard" | killed, and it went the wrong way: the baselines reached 0.171 and 0.218 |
-| The `x_sparse` ablation: the same probe, same timestep, same standardization, on activations instead of synapses | "BDH knows the answer, but in its activations, not in its synapse state" | `x_sparse` reached 0.062, below `sigma_full`'s 0.101, so the synapse state does carry more than the activations, just not by the required margin |
+| The `x_sparse` ablation: the same probe, same timestep, same standardization, on activations instead of synapses | "BDH knows the answer, but in its activations, not in its synapse state" | `x_sparse` reached 0.062, below `sigma_full`'s 0.101, so the synapse state is **more linearly decodable** than the activations, just not by the required margin. Note this is a decodability comparison, not a content claim (section 8's own rule), and the two arms are not matched: 524,288 features from 24,000 examples against 8,192 from 61,400 |
 | The `resid` feature, 64 dims | sets a floor for what a tiny readout gets | 0.040, above chance, well below everything else |
 | Per-model LR sweep over 3e-4, 1e-3, 3e-3 at seed 0, then 3 seeds at the argmin | "you picked a bad learning rate for the baseline" and "that is one seed of noise" | all three families selected 3e-3; the maximum within-arm spread of best validation CE across seeds is 0.0020 nats |
-| Identical training protocol: same data, 4,000 steps, batch 32 whole episodes, AdamW (0.9 / 0.95, weight decay 0.1), 200 warmup steps then cosine to 0.1x, grad clip 1.0, fp32, masked CE, eval every 200 steps, best-val checkpoint | "the baselines got a better recipe" | no free parameters left to differ |
-| The prediction-quality table, test CE on `probe_test` episodes the models never trained on | "the interpretability was bought by breaking the model" | killed decisively: BDH 0.0246 vs LSTM 0.0291 vs RWKV 0.0242 |
+| Identical training protocol: same data, 4,000 steps, batch 32 whole episodes, AdamW (0.9 / 0.95, weight decay 0.1), 200 warmup steps then cosine to 0.1x, grad clip 1.0, fp32, masked CE, eval every 200 steps, best-val checkpoint | "the baselines got a better recipe" | every optimization hyperparameter matched. One architectural knob is **not** matched and should be stated: the BDH configs set `dropout: 0.1` (applied to `xy` in training mode), the LSTM config sets `dropout: 0.0`, and the RWKV baseline has no dropout at all. If anything that regularizes BDH more than its comparators |
+| The prediction-quality table, test CE on `probe_test` episodes the models never trained on | "the interpretability was bought by breaking the model" | killed: BDH 0.0246 beats the LSTM's 0.0291 and is level with RWKV's 0.0242 (marginally behind it, and behind on val CE too) |
 | Disjoint seed ranges for every split | "the probe is reading memorized training episodes" | structurally impossible |
-| Parallel/recurrent equivalence tests (section 3) | "the instrumented model is not the trained model" | bit-identical at $\gamma = 1$; `atol = 1e-4` at $\gamma = 0.9$ |
+| Parallel/recurrent equivalence tests (section 3) | "the instrumented model is not the trained model" | `forward` versus sequential `step()` agree to `atol = 1e-4` at $\gamma = 1.0$ **and** at $\gamma = 0.9$. Separately, and on a different pair of paths, `forward` at $\gamma = 1$ is bit-identical to upstream `BDH.forward` |
 | Preregistration with a named kill criterion, commit `e674b1da138f905670dde5571e1a1890b134fe36`, before any headline run | "you found the story that fit the data" | the rule that fired is the one written down in advance |
 
 The preregistration is the control that does the most work, and specifically the kill criterion:
@@ -531,10 +594,19 @@ episodes whose belief flips to the new cell within 5 steps is 0.157 ($\gamma = 1
 baselines pass easily at 0.940 and 0.953.
 
 **H4 (sparse readout): not supported for BDH.** Median $k_{90}$ is 524,288, the full feature count,
-for every BDH arm: no proper sparse subset of features reached 90% of full accuracy. Both baselines
-are strongly sparse at median $k_{90} = 256$.
+for every BDH arm: none of the sparse budgets that were tested reached 90% of full accuracy. Both
+baselines are strongly sparse at median $k_{90} = 256$.
 
-**Prediction quality: BDH is equal or better.** Test masked CE on held-out `probe_test` episodes:
+That statement needs the caveat RESULTS.md attaches to it. Only six proper budgets were tried,
+$k \in \{16,\ 64,\ 256,\ 1{,}024,\ 4{,}096,\ 16{,}384\}$ (`h4_ks` in `hbwm/probes/run.py`), and the
+largest is 16,384, which is only **3.1% of the 524,288 features**. The grid's terminal point is
+$k = \text{all}$, so `k90 = n_features` is a **fallback by construction**, not a measurement that
+some subset of size 100,000 was tried and failed. Everything between 3.1% and 100% is unprobed. The
+strong ($k_{90} \le 256$) and weak ($k_{90} \le 1\%$) verdicts are unaffected by that gap, because
+both thresholds sit below 16,384 and were missed outright.
+
+**Prediction quality: BDH is equal or better than the LSTM, and level with RWKV.** Test masked CE on
+held-out `probe_test` episodes:
 
 | model | val CE | test CE | test CE (window cells only) |
 |---|---|---|---|
@@ -544,8 +616,9 @@ are strongly sparse at median $k_{90} = 256$.
 | lstm | 0.0284 | 0.0291 | 0.0305 |
 | rwkv | 0.0238 | 0.0242 | 0.0246 |
 
-So BDH out-predicts the LSTM it loses to on every single probe hypothesis. The interpretability was
-not bought by breaking the model; there was nothing broken to buy it with.
+So BDH out-predicts the LSTM it loses to on every single probe hypothesis, and is a hair behind RWKV
+(0.0246 against 0.0242 on test, 0.0242 against 0.0238 on validation) rather than ahead of it. The
+interpretability was not bought by breaking the model; there was nothing broken to buy it with.
 
 Figures: `docs/figures/h2_curves.png`, `docs/figures/h4_curves.png`, and two exploratory belief
 heatmaps, `docs/figures/belief_ep0_t48.png` and `docs/figures/belief_ep1_reobs_t34.png`.
@@ -574,8 +647,19 @@ turn across the entire episode, so parts of the code are almost phase-free and p
 beyond any fixed linear map's ability to realign.
 
 **(iii) Estimation.** 524,288 features estimated from 24,000 examples, against 8,192 features from
-61,400 for every comparator. That is 42,467,328 probe weights fitted from 24,000 labeled examples,
-roughly 1,770 free parameters per example.
+61,400 for every comparator. Taken at face value that is 42,467,328 probe weights (524,288 times 81
+classes) fitted from 24,000 labeled examples, roughly **1,770 free parameters per example**.
+
+That face value is too pessimistic, and the post-hoc sparsity measurement below (finding (a)) says by
+how much. At the selected level 3, $\sigma$'s row-norm participation ratio at the final timestep is
+0.050, so on the order of 5% of the 2,048 neuron rows carry the effective mass and roughly 95% of the
+524,288 columns are near-constant across examples. Near-constant columns are exactly what the
+standardization rule neutralizes: std below 1e-6 maps to 1.0, so those features arrive at the probe
+as approximately zero and contribute almost nothing to the fit. The effective feature count is closer
+to **26,000**, giving about $26{,}000 \times 81 / 24{,}000 \approx \mathbf{88}$ effective free
+parameters per example. That is still worse than any comparator's budget, and 88 per example is still
+a hard regime for a flat probe, but it is a factor of twenty milder than 1,770. The estimation story
+is **weakened, not eliminated**, and the honest number to quote is 88, not 1,770.
 
 **The corroborating clue.** `sigma_rownorm` reaches 0.172 against `sigma_full`'s 0.101, on a feature
 set 64 times smaller, and lands level with the LSTM state's 0.171. The row-norm view is a
@@ -587,19 +671,100 @@ is exactly phase-invariant). A strictly lossy summary beating the full state is 
 (i), (ii) and (iii) predict, and it is not what you would expect if $\sigma$ simply had little to
 say.
 
-**The alternative that cannot be dismissed.** $\sigma$ at the probed level may simply carry little
-precise location information. Prediction quality does not rescue the hypothesis here: BDH predicts
-better than the LSTM, so the belief information demonstrably drives next-token behavior somewhere in
-the network, but "somewhere" includes `x_sparse`, the residual stream, and the composition across
-six levels, not necessarily $\sigma$ at the one or two levels that were probed. The exploratory
-heatmaps are consistent with the pessimistic reading: at $t = 0$ of episode 1 the three object
-panels are near-identical smooth gradients with no object-specific structure, and at the
-re-observation step of episode 1 the just-seen object's map is *darkest* exactly where it was seen.
-Those maps look dominated by an object-independent component.
+**The alternative, and what is left of it.** The alternative used to be stated as: $\sigma$ at the
+probed level may simply carry little precise location information. That is now **half refuted**, and
+the refutation is the post-hoc spatial-locality analysis below (finding (b)). An approximate spatial
+belief is demonstrably present in $\sigma$. Reading the argmax cell exactly is what fails; landing
+near the right cell is something $\sigma$ does three to four times better than its own chance rate,
+under a properly per-row computed chance, with the agent-proximity confound controlled.
 
-Two things should be kept in proportion. 0.101 is roughly nine times chance, so $\sigma$ is not
-empty. And every decoder here sits far above chance and far below the 1.000 ceiling, so exact-cell
-readout of an out-of-view object is hard for every architecture tested, not only for BDH.
+What survives is a narrower and more useful claim: $\sigma$ at the probed level carries a **blurrier**
+spatial belief than the baseline states do, blurrier by enough to fail the exact-cell test that H1
+was written around. That is a statement about resolution, not about presence.
+
+Prediction quality still does not rescue the original hypothesis: BDH predicts better than the LSTM,
+so belief information demonstrably drives next-token behavior somewhere in the network, but
+"somewhere" includes `x_sparse`, the residual stream, and the composition across six levels, not
+necessarily $\sigma$ at the one or two levels that were probed.
+
+The exploratory heatmaps were previously offered as consistent with the pessimistic reading, and that
+sentence needs qualifying now. At $t = 0$ of episode 1 the three object panels are near-identical
+smooth gradients with no object-specific structure, and at the re-observation step of episode 1 the
+just-seen object's map is *darkest* exactly where it was seen. Those maps do look dominated by an
+object-independent component. But the heatmaps are one hand-built read of $\sigma$ through a
+particular pair of atlas index sets, and finding (b) shows a spatial signal that this particular
+readout evidently does not surface. The right conclusion from the heatmaps is that **the atlas-based
+belief map is the wrong instrument**, not that the belief is absent.
+
+Two things should be kept in proportion. 0.101 is roughly nine times chance on exact cells, and
+within-radius-1 is roughly three times chance, so $\sigma$ is not empty. And every decoder here sits
+far above chance and far below the 1.000 ceiling, so exact-cell readout of an out-of-view object is
+hard for every architecture tested, not only for BDH.
+
+### Three post-hoc findings, and the headline they support
+
+Everything in this subsection is exploratory, descriptive, computed after the fact on saved
+artifacts, and changes **no** preregistered decision. Full method and caveats are in RESULTS.md under
+"Post-hoc analyses (exploratory, not preregistered)"; the scripts are in `analysis/posthoc/`.
+
+**(a) $\sigma$ is structurally sparse and lowish rank.** Measured on the $\gamma = 1$ seed-0
+checkpoint over 64 `probe_test` episodes, at the final timestep, 256 episode-by-head samples per
+cell. At level 3, the level the probe independently selected, the participation ratio of $\sigma$'s
+row norms is $0.050 \pm 0.014$ of 2,048, so about **103 of 2,048 neuron rows** carry the effective
+mass, and 83% of rows sit below 10% of the maximum row norm. Of the 64 singular values,
+$10.9 \pm 3.9$ carry 90% of the squared Frobenius mass and 33.2 carry 99%, with a
+participation-ratio-of-squared-singular-values of 3.05. `x_sparse` is 81% zero, and the top 1% of
+neurons take 8.7% of the total write mass accumulated over an episode. Levels 0 and 5 are sparser
+still (participation ratios 1.1% and 2.1%) and lower rank than level 3. From the early snapshot to
+the final one, row occupancy *falls* (0.080 to 0.050) while *more* singular values pick up non-trivial
+mass ($k_{90}$ 4.24 to 10.94): $\sigma$ concentrates into fewer rows while spreading across more of
+the value space. Single checkpoint, not cross-seed.
+
+**(b) The probe's errors are spatially local.** On the 41,039 test rows per seed, three seeds,
+identical rows across every spec. Chance is computed per row from the true cell's own neighborhood
+size, which shrinks at edges and corners, and averages to 0.097 for within-radius-1:
+
+| spec | exact acc | within-radius-1 acc | chance | mean Chebyshev error |
+|---|---|---|---|---|
+| BDH `sigma_full` | 0.101 | 0.308 | 0.097 | 2.92 |
+| BDH `sigma_rownorm` | 0.172 | 0.403 | 0.097 | 2.44 |
+| RWKV `state_vec` | 0.218 | 0.542 | 0.097 | 1.95 |
+
+Every spec beats both a uniform null (expected distance 4.10) and a row-shuffled null (4.03 to 4.07)
+under the full predictive distribution, not just the argmax. The obvious confound is controlled and
+comes back clean: mean distance from the prediction to the agent is 3.7 to 4.0 cells against 3.81 for
+the true object, and predictions land on the agent's own cell only 0.1% to 1.0% of the time, so the
+locality is not "guess near the agent".
+
+**(c) BDH fades where the baselines corrupt.** Within-radius-1 accuracy by steps since last seen:
+
+| bucket | BDH `sigma_rownorm` | RWKV `state_vec` |
+|---|---|---|
+| 1-4 | 0.425 +/- 0.029 | 0.686 +/- 0.005 |
+| 33-64 | 0.257 +/- 0.024 | 0.155 +/- 0.003 |
+
+The ordering **inverts** at long horizons. And at the 65+ bucket both baselines' expected error under
+the full distribution exceeds that row set's own uniform null, in all three seeds individually
+(LSTM 4.609 and RWKV 4.850 against a null of 4.542): a distribution cannot be worse than uniform in
+expectation unless it puts systematic mass on the *wrong* cells, so the baselines at very long gaps
+are confidently wrong rather than uninformative. BDH's expected error never crosses its null at any
+bucket. A Gaussian-blur calibration puts BDH at about 2.9 cells overall, widening to 5 or 6 cells at
+the longest gaps, and RWKV at about 2.4 cells overall, widening to about 8 cells by 33-64 and
+unmatchable to any blur scale at 65+. The by-bucket exact-match recomputation reproduces RESULTS.md's
+H2 table to three decimals, which is the pipeline's own correctness check.
+
+Two caveats belong with (c). The 65+ bucket has 662 rows, shared across seeds rather than
+independently drawn, so read it as indicative. And for `sigma_full` specifically the within-radius-1
+decay is within noise: a 0.028 drop from bucket 1-4 to 33-64, about one seed standard deviation. The
+decay claim rests on `sigma_rownorm` and on the distance-based measures, not on `sigma_full`
+accuracy.
+
+**The strongest honest headline the three findings support together.** All three architectures hold
+an approximate spatial belief. BDH's is blurrier at short horizons, and that blurriness is exactly
+what fails H1, which was written as an exact-cell test. But BDH's belief degrades toward *vagueness*
+while the baselines' degrades into *confident error*, and that asymmetry is the one property in this
+study that distinguishes the Hebbian state from the recurrent ones in BDH's favor. It is post-hoc,
+single-environment, and not what was preregistered. It is also the finding most worth following up.
 
 **Which of these Study 2 separates.** H5 refits a flat linear probe and a family of structured
 (low-rank bilinear) readouts on the *same* $\sigma$ with the *same* 24,000 pairs, which separates
@@ -631,10 +796,19 @@ Full design: [`docs/superpowers/specs/2026-08-27-hbwm-study2-associative-readout
 ## 10. Reproducing this, and reading the repo
 
 Commands live in [README.md](../README.md#reproduction): `uv sync --extra dev`, then dataset
-generation, then `hbwm.matrix --phase {e1,e2,e3,probes}`, then `hbwm.probes.evaluate`. The full
-matrix is roughly one to two days of background wall-clock on Apple Silicon (MPS, fp32); the
-`sigma_full` probe stage needs about 25 GB of scratch disk per level. The 111-test suite runs on CPU
-with tiny configs in seconds.
+generation, then `hbwm.matrix --phase {e1,e2,e3,probes}`, then `hbwm.probes.evaluate`.
+
+**Wall-clock, from the artifacts rather than from the estimate.** The design spec guessed one to two
+days; the runs say otherwise. Summing `seconds` across the 21 `final.json` files gives
+**246,034 s of training (68.3 h)**, and summing `elapsed_s` across the 15 `probes/done.json` files
+gives **50,228 s of probing (14.0 h)**, for **82.3 h, about 3.4 days** of background wall-clock on
+Apple Silicon (MPS, fp32). Budget **three to four days**. Note that a chunk of that is throttling
+rather than work: runs alternated between lid-closed dark-wake and awake operation, which moves
+per-run wall-clock by roughly 2x at identical settings.
+
+The `sigma_full` probe stage needs about 25 GB of scratch disk per selected level and opens all
+selected levels at once, so budget about 75 GB for the three-level Study 1 default (section 6). The
+115-test suite runs on CPU with tiny configs in seconds.
 
 **Module map.**
 
@@ -645,8 +819,10 @@ with tiny configs in seconds.
 | `hbwm/baselines/` | `lstm.py`, `rwkv.py` (chunked WKV), `matching.py` (the parameter-count solver) |
 | `hbwm/instrument/` | `recorder.py` (drives `step()` and hands out per-position payloads), `features.py`, `atlas.py`, `belief.py` |
 | `hbwm/probes/` | `eligibility.py`, `extract.py`, `probe.py`, `run.py`, `decisions.py` (the H1 to H4 rules as pure functions), `evaluate.py` |
+| `hbwm/viz/` | `heatmaps.py`, the CLI that renders the exploratory belief-map frames and animations |
 | `hbwm/` | `train.py`, `matrix.py`, `models.py`, `config.py`, `device.py`, `losses.py`, `sanity_shakespeare.py` |
-| `experiments/`, `tests/` | the data and training configs; 111 CPU tests, including the equivalence contract and the decision-rule unit tests |
+| `analysis/posthoc/` | the three exploratory scripts behind findings (a), (b) and (c) in section 8, read-only on `runs/` and `data/` |
+| `experiments/`, `tests/` | the data and training configs; 115 CPU tests, including the equivalence contract and the decision-rule unit tests |
 
 **Where the artifacts live.** `runs/` and `data/` are gitignored and physically live in the sibling
 worktree `.claude/worktrees/study1-impl/`. Checkpoints are at
