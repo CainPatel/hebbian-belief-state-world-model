@@ -8,13 +8,16 @@ from hbwm.probes.evaluate import aggregate, best_level, write_outputs
 BUCKETS = ["1-4", "5-8", "9-16", "17-32", "33-64", "65+"]
 
 
-def _probe_json(acc, n_features, with_h4=False, val=None):
+def _probe_json(acc, n_features, with_h4=False, val=None, h4_reaches=True):
     r = {"feature": "f", "level": 0, "n_features": n_features, "n_train": 10, "n_val": 10, "n_test": 10,
          "val_acc": {"0.001": val if val is not None else acc}, "best_l2": 0.001, "test_acc": acc, "ci95": [acc - 0.05, acc + 0.05],
          "chance": 0.05, "ceiling": 1.0, "bucket_acc": {b: max(0.0, acc - 0.05 * i) for i, b in enumerate(BUCKETS)},
          "bucket_n": {b: 10 for b in BUCKETS}}
     if with_h4:
-        r["h4"] = {"ks": [16, 64, 256], "acc_by_k": {"16": acc - 0.3, "64": acc - 0.1, "256": acc - 0.02}, "acc_all": acc,
+        # h4_reaches=False: no listed k reaches 90% of acc_all, so h4_k90 falls back to k90 = n_features,
+        # a key never present in acc_by_k/neurons_by_k (the grid only lists ks, not the terminal "all").
+        acc_by_k = {"16": acc - 0.3, "64": acc - 0.1, "256": acc - 0.02} if h4_reaches else {"16": 0.01, "64": 0.01, "256": 0.01}
+        r["h4"] = {"ks": [16, 64, 256], "acc_by_k": acc_by_k, "acc_all": acc,
                    "neurons_by_k": {"16": 10, "64": 30, "256": 100}, "n_neurons_total": 8192}
     return r
 
@@ -46,7 +49,7 @@ def test_best_level_breaks_val_ties_by_lowest_level():
         assert name == "sigma_full_L2" and r["level"] == 2 and r["test_acc"] == 0.60
 
 
-def _build_matrix(root, lstm_h4_seeds=(0, 1, 2), lstm_n_params=100):
+def _build_matrix(root, lstm_h4_seeds=(0, 1, 2), lstm_n_params=100, bdh_h4_reaches=True):
     for stem in MODELS:  # E1 sweep artefacts so best_lr resolves to 1e-3
         for lr in LRS:
             if lr != 1e-3:
@@ -54,7 +57,8 @@ def _build_matrix(root, lstm_h4_seeds=(0, 1, 2), lstm_n_params=100):
     h3arr = {"p_old": np.array([0.9, 0.2, 0.1]), "p_new": np.array([0.1, 0.8, 0.9]), "ep": np.array([0, 0, 1]),
              "t": np.array([5, 6, 9]), "steps_since_reobs": np.array([0, 1, 0]), "visible_now": np.array([True, False, True])}
     for seed in range(3):
-        bdh_probes = {"sigma_full_L2": _probe_json(0.80 + 0.01 * seed, 524288, True), "sigma_full_L5": _probe_json(0.6, 524288, val=0.5),
+        bdh_probes = {"sigma_full_L2": _probe_json(0.80 + 0.01 * seed, 524288, True, h4_reaches=bdh_h4_reaches),
+                      "sigma_full_L5": _probe_json(0.6, 524288, val=0.5),
                       "sigma_rownorm_L2": _probe_json(0.7, 8192), "x_sparse_L2": _probe_json(0.5, 8192), "resid_L2": _probe_json(0.4, 64)}
         _fake_run(root, "bdh_g100", 1e-3, seed, 0.5, bdh_probes, ("sigma_full_L2", h3arr))
         for arm in GAMMA_ARMS:
@@ -71,6 +75,7 @@ def test_aggregate_and_write(tmp_path):
     agg = aggregate(root, "x")
     assert agg["h1"]["supported"] and set(agg["h1"]["comparators"]) == {"x_sparse", "lstm", "rwkv"}
     assert agg["table"]["bdh_g100"]["sigma_full"]["levels"] == [2, 2, 2]
+    assert agg["table"]["lstm"]["state_vec"]["levels"] == [None, None, None]  # baselines have no probe level
     assert agg["h2"]["bdh_g100"]["graceful"] is True and "lstm" in agg["h2"]
     assert agg["h3"]["bdh_g100"]["mean_frac_le5"] == 1.0 and agg["h3"]["bdh_g100"]["supported"]
     # exploratory H3 variant on the not-visible rows only; the headline number is untouched
@@ -86,7 +91,20 @@ def test_aggregate_and_write(tmp_path):
     assert "H1" in md and "sigma_full" in md and "lstm" in md
     assert "n_train" in md and "| 10 |" in md  # training-set size per probe
     assert "| n(1-4) |" in md and "| bdh_g100 | 10 | 10 | 10 | 10 | 10 | 10 |" in md  # H2 test-pair counts
+    assert "[2, 2, 2]" in md  # non-baseline levels still render as a list
+    assert "[None, None, None]" not in md  # baseline state_vec rows render '-', not a literal list of Nones
     assert "not-visible" in md  # exploratory H3 column
+
+
+def test_neurons_at_k90_falls_back_to_n_neurons_total_at_terminal_k90(tmp_path):
+    root = tmp_path
+    _build_matrix(root, bdh_h4_reaches=False)
+    agg = aggregate(root, "x")
+    h4 = agg["h4"]["bdh_g100"]
+    assert h4["median_k90"] == 524288  # no listed k reaches 90%, so k90 falls back to n_features
+    for d in h4["per_seed"].values():
+        assert d["k90"] == 524288  # terminal fallback: not a key ever present in acc_by_k/neurons_by_k
+        assert d["neurons_at_k90"] == 8192  # falls back to h4.n_neurons_total, not None
 
 
 def test_seed_without_h4_counts_as_infinite_k90(tmp_path):

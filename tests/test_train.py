@@ -57,6 +57,21 @@ def test_evaluate_keys(tiny_data):
     assert set(out) == {"val_ce", "val_ce_window"} and out["val_ce"] > 0
 
 
+def test_evaluate_restores_caller_training_mode(tiny_data):
+    from hbwm.models import build_model
+
+    d = EpisodeData(tiny_data.out_dir, "model_val")
+    cfg = TrainConfig(batch_size=4, eval_episodes=8)
+
+    m_eval = build_model("bdh", TINY_BDH).eval()
+    evaluate(m_eval, d, cfg, torch.device("cpu"))
+    assert m_eval.training is False
+
+    m_train = build_model("bdh", TINY_BDH).train()
+    evaluate(m_train, d, cfg, torch.device("cpu"))
+    assert m_train.training is True
+
+
 def test_checkpoint_roundtrip(tiny_data, tmp_path):
     from hbwm.models import build_model
 

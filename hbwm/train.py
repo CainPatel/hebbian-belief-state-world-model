@@ -54,6 +54,7 @@ def run_dir(cfg: TrainConfig) -> Path:
 
 @torch.no_grad()
 def evaluate(model, data: EpisodeData, cfg: TrainConfig, device) -> dict:
+    was_training = model.training
     model.eval()
     n = min(cfg.eval_episodes, data.n)
     tot_all = tot_win = 0.0
@@ -70,7 +71,7 @@ def evaluate(model, data: EpisodeData, cfg: TrainConfig, device) -> dict:
         cnt_all += int(mb.sum())
         tot_win += float(ce[wb].sum())
         cnt_win += int(wb.sum())
-    model.train()
+    model.train(was_training)
     return {"val_ce": tot_all / cnt_all, "val_ce_window": tot_win / cnt_win}
 
 

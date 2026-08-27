@@ -100,7 +100,14 @@ def aggregate(root, exp, data_dir=None) -> dict:
                 if "h4" in r:
                     had_h4 = True
                     d = h4_k90(r["h4"]["acc_by_k"], r["h4"]["acc_all"], r["n_features"])
-                    d["neurons_at_k90"] = (r["h4"]["neurons_by_k"] or {}).get(str(d["k90"]))
+                    neurons_by_k = r["h4"]["neurons_by_k"] or {}
+                    # k90 = n_features is the terminal fallback (spec 4.5 grid ends in "all"; no listed k
+                    # reached the threshold), a key never present in neurons_by_k, which only lists the
+                    # explicit k grid. Fall back to the run's total neuron count (None for non-BDH baselines).
+                    if d["k90"] == r["n_features"] or str(d["k90"]) not in neurons_by_k:
+                        d["neurons_at_k90"] = r["h4"]["n_neurons_total"]
+                    else:
+                        d["neurons_at_k90"] = neurons_by_k[str(d["k90"])]
                     per_seed_h4[seed] = {"spec": spec, "acc_by_k": r["h4"]["acc_by_k"], **d}
                     k90s.append(d["k90"])
             if not had_h4:  # a seed with no H4 at all is a seed whose k90 was never reached
@@ -166,8 +173,9 @@ def write_outputs(agg: dict, out_dir) -> None:
              "|---|---|---|---|---|---|---|---|"]
     for stem, feats in agg["table"].items():
         for f, r in feats.items():
+            levels = "-" if all(lv is None for lv in r["levels"]) else r["levels"]
             lines.append(f"| {stem} | {f} | {r['mean']:.3f} ± {r['std']:.3f} | {r['chance']:.3f} | {r['ceiling']:.3f} "
-                         f"| {r['n_features']} | {_val(r.get('n_train'))} | {r['levels']} |")
+                         f"| {r['n_features']} | {_val(r.get('n_train'))} | {levels} |")
     h1 = agg["h1"]
     lines += ["", f"## H1 — supported: **{h1['supported']}** (margin {h1['margin']:.2f})", "",
               "| comparator | mean diff | paired diffs | passes |", "|---|---|---|---|"]
