@@ -618,3 +618,14 @@ expected error never crosses its own uniform null at any horizon while both base
 This is post-hoc, single-environment, and not what was preregistered. It does not rescue H1, H3 or
 H4, and it does not change the kill criterion's status. It is offered as the most defensible reading
 of the saved artifacts and as the finding most worth following up.
+
+## Study 2 preregistration
+
+Decision rules: see README.md, "Preregistration (Study 2)". Preregistration commit:
+`<hash filled in Step 5>`.
+
+## Study 2 headline (filled by Task 15)
+
+- Probe accuracy by family with effective rank fractions, H5 to H8 decisions, bridge rows:
+  copied from `runs/study1/results2/results.md`.
+- Exploratory sigma-structure measurements: `runs/study1/*/seed*/probes2/sigma_structure_L*.json`.

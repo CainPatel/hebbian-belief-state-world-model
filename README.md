@@ -1,4 +1,4 @@
-# Hebbian Belief-State World Model (HBWM): Study 1
+# Hebbian Belief-State World Model (HBWM): Studies 1 and 2
 
 Does the plastic synapse state $\sigma$ of a BDH ("the Dragon Hatchling") core encode linearly
 readable beliefs about a partially observed gridworld? Study 1 trains three parameter-matched
@@ -91,6 +91,73 @@ preregistered decision**, and none of them rescues H1. Scripts are in
 - **[Study 2 design](docs/superpowers/specs/2026-08-27-hbwm-study2-associative-readout-design.md)** and **[plan](docs/superpowers/plans/2026-08-27-hbwm-study2.md)**: associative readout of $\sigma$, designed and preregistered, not run.
 - **[analysis/posthoc/](analysis/posthoc/)**: the three exploratory scripts behind the post-hoc findings.
 - **[docs/hf/](docs/hf/)**: model and dataset cards for optional Hugging Face artifact hosting.
+
+## Preregistration (Study 2)
+
+Study 1's H1 was not supported and its kill criterion fired. Study 2 asks whether the belief
+information is present in sigma but written in an associative, query-addressable format that a flat
+linear probe of 524,288 free parameters cannot estimate from 24,000 examples. Buildable design:
+[docs/superpowers/specs/2026-08-27-hbwm-study2-associative-readout-design.md](docs/superpowers/specs/2026-08-27-hbwm-study2-associative-readout-design.md).
+
+Probe families, all on identical eligible pairs, splits, L2 grid, bootstrap CI and steps-since-seen
+buckets, and all trained on the same 24,000-pair stratified subsample: `flat_linear` (control),
+`query_rank_r`, `shared_query_rank_r`, `derot_flat_linear`, `derot_query_rank_r` with r in {1, 4, 16}
+chosen on probe_val, and the capacity control `mlp_state`, joined on BDH by the two reductions
+`mlp_rownorm` and `mlp_randproj`. Every family that can be defined on a baseline state is run on the
+LSTM state (1,400, reshaped 4 x 350) and the RWKV state (3,520, reshaped 20 x 176); derotation on a
+baseline is the identity, and family 5's matched arm is `mlp_state` on all three states, with the two
+BDH-only reductions reported as context and feeding H7. Features are standardized per entry on
+probe_train exactly as in Study 1; the derotated families derotate the raw state first and standardize
+in the derotated frame, with their own statistics, because the two operations do not commute. Every
+factorized number is reported with its effective rank fraction r / min(P, Q), clipped at 1.00, and
+1.00 marks a saturated arm. `mlp_randproj`'s projection is sparse (64 signed nonzeros per output
+dimension, seeded per checkpoint, fixed and not learned) and its construction is recorded.
+
+**Decision rules (3 seeds, fixed before any Study 2 run):**
+
+- **H5 (format and estimation):** supported iff mean acc(best structured sigma readout, families 2 to
+  4) minus mean acc(`flat_linear` on sigma) is greater than 5 points and all three paired-by-seed
+  differences are positive.
+- **H6 (revised H1, the headline):** for the best matched family, supported iff mean acc(sigma)
+  exceeds mean acc(LSTM state) and mean acc(RWKV state) by more than 5 points each with all paired
+  differences positive. The verdict states which family carried it and whether either baseline arm
+  was saturated. A factorized win over a saturated baseline arm is a rank-constraint artifact
+  and is flagged as such, so H6 is also read against the reshape-free families. Kill criterion: if H6
+  fails against the LSTM state under matched families, the "sigma as a linearly or bilinearly readable
+  belief state" line is closed.
+- **H7 (attribution, reported not gated):** compare `mlp_rownorm` against the best structured sigma
+  readout. If the MLP is within 2 points or better, attribute any gain to capacity and nonlinearity
+  rather than to associative structure.
+- **H8 (belief revision, revised H3):** latency measured from the first step after re-observation at
+  which the object is not visible. Episodes where the object never leaves the window have no such step
+  and are excluded from the denominator, not counted as failures; the excluded fraction is reported and
+  above 25% the result is flagged low-coverage. Episodes with such a step that never flip are failures.
+  Supported iff latency is 5 steps or less in at least 70% of the episodes in the denominator.
+
+**Degeneracy criterion (preregistered, gates H6's selection).** An arm is declared degenerate and
+excluded from H6's best-matched-family selection if its probe_train accuracy exceeds 0.95 while its
+probe_val accuracy is below twice the majority-class chance rate, at every value of the L2 grid, using
+at each L2 the restart that maximizes validation accuracy and applying the test to the seed-mean
+accuracies. It applies to every arm of every family and every model. Because an H6 comparison needs
+all three arms present, exclusion then operates at the family level: a family is excluded from H6's
+best-matched-family selection in full if any one of its three state-arms (BDH, LSTM, RWKV) is
+degenerate. Degenerate arms are still fitted and still reported with their parameter count, training
+accuracy and validation accuracy, and are labeled degenerate in the results table. This stops a
+probe that has merely memorized its training set from deciding a hypothesis. It matters because the
+comparison carries a dimensionality asymmetry that
+is not specific to any one family: BDH's state is 524,288-dimensional against 1,400 and 3,520 for the
+baselines, in Study 2 as in Study 1.
+
+Anything not listed above is exploratory, notably the `synapse_atlas` readout and the descriptive
+sigma-structure measurements.
+
+## How to run Study 2
+
+```bash
+uv run python -m hbwm.matrix --phase study2 --exp study1 --dry-run
+uv run python -m hbwm.matrix --phase study2 --exp study1
+uv run python -m hbwm.matrix --phase study2-evaluate --exp study1
+```
 
 ## Reproduction
 

@@ -55,6 +55,14 @@ def headline_runs(root, exp):
     return jobs + e3_jobs(root, exp)
 
 
+STUDY2_LEVELS = {0: [3, 4], 1: [3], 2: [4]}  # spec section 6: each seed's Study 1 best levels
+
+
+def study2_jobs(root, exp="study1"):
+    lr = 0.003  # RESULTS.md: best_lr.json selected 3e-3 for all three families
+    return [(stem, lr, seed) for stem in MODELS for seed in SEEDS]
+
+
 def train_cmd(job, root, data=None):
     stem, lr, seed = job
     cmd = [sys.executable, "-m", "hbwm.train", "--config", f"experiments/train/{stem}.json",
@@ -70,7 +78,8 @@ def _run(cmd, dry):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--phase", required=True, choices=["e1", "e2", "e3", "probes", "evaluate"])
+    ap.add_argument("--phase", required=True,
+                     choices=["e1", "e2", "e3", "probes", "evaluate", "study2", "study2-evaluate"])
     ap.add_argument("--root", default="runs")
     ap.add_argument("--exp", default="study1")
     ap.add_argument("--data", default="data/grid9")
@@ -107,6 +116,29 @@ def main():
         print(f"probes phase: {len(failed)} failed: {' '.join(failed)}", flush=True)
         if failed:
             sys.exit(1)  # the shell chain must still stop before evaluate
+    elif args.phase == "study2":
+        failed = []
+        for stem, lr, seed in study2_jobs(root):
+            rd = run_path(root, args.exp, stem, lr, seed)
+            if (rd / "probes2" / "done.json").exists():
+                print(f"skip (probed): {rd}")
+                continue
+            cmd = [sys.executable, "-m", "hbwm.probes.run", "--run-dir", str(rd), "--data", args.data,
+                   "--study", "2"]
+            if stem.startswith("bdh"):
+                cmd += ["--levels", ",".join(str(x) for x in STUDY2_LEVELS[seed])]
+            try:
+                _run(cmd, args.dry_run)
+            except subprocess.CalledProcessError as e:
+                shutil.rmtree(rd / "probes2" / "cache", ignore_errors=True)
+                print(f"study2 probe run failed (rc={e.returncode}): {rd}", flush=True)
+                failed.append(str(rd))
+        print(f"study2 phase: {len(failed)} failed: {' '.join(failed)}", flush=True)
+        if failed:
+            sys.exit(1)
+    elif args.phase == "study2-evaluate":
+        _run([sys.executable, "-m", "hbwm.probes.evaluate", "--root", root, "--exp", args.exp,
+              "--data", args.data, "--study", "2"], args.dry_run)
     else:
         _run([sys.executable, "-m", "hbwm.probes.evaluate", "--root", root, "--exp", exp,
               "--data", args.data], args.dry_run)
