@@ -6,6 +6,9 @@ import torch
 
 from hbwm.baselines.lstm import LSTMLM, LSTMConfig
 from hbwm.bdh.core import HBWMConfig, HBWMCore
+from hbwm.envs.dataset import EpisodeData
+from hbwm.instrument.structure import measure_sigma_structure
+from hbwm.probes.eligibility import sample_pairs
 from hbwm.probes.probe import feature_stats
 from hbwm.probes.run import Study2Config, _derived_inputs, run_probes_study2
 from hbwm.probes.structured import apply_randproj, sparse_randproj
@@ -159,3 +162,53 @@ def test_repeated_levels_are_deduplicated_and_sorted(tiny_data, tmp_path):
     cfg = Study2Config(**{**vars(SMOKE), "families": ["flat_linear"], "levels": [1, 1, 0]})
     out = run_probes_study2(run_dir, tiny_data.out_dir, cfg, device="cpu")
     assert out["specs"] == ["flat_linear_L0", "flat_linear_L1"]
+
+
+def test_measure_sigma_structure_returns_all_five_blocks(tiny_data):
+    torch.manual_seed(0)
+    m = HBWMCore(TINY_BDH).eval()
+    d = EpisodeData(tiny_data.out_dir, "probe_train")
+    pairs = sample_pairs(d, np.random.default_rng(0), per_obj=2)
+    r = measure_sigma_structure(m, d, pairs, level=1, n_sample=8, seed=0, device="cpu",
+                                atlas_episodes=4)
+    assert set(r) == {"row_norm", "effective_rank", "activation", "write_concentration",
+                      "atlas_selectivity", "n_sample", "level", "exploratory"}
+    assert r["exploratory"] is True and r["n_sample"] == 8
+    assert r["effective_rank"]["n_singular_values"] == TINY_BDH.n_embd
+
+
+def test_measure_sigma_structure_is_invariant_to_the_episode_batch_size(tiny_data):
+    """Episode batching (memory hygiene) must be numerically exact, not an approximation.
+
+    The write-mass accumulator is per-episode independent and every reported number is an
+    order-independent summary, so chunking the sampled episodes cannot move any of them.
+    """
+
+    def flat(block):
+        return [v for k in sorted(block) for v in
+                (sorted(block[k].values()) if isinstance(block[k], dict) else [block[k]])]
+
+    torch.manual_seed(0)
+    m = HBWMCore(TINY_BDH).eval()
+    d = EpisodeData(tiny_data.out_dir, "probe_train")
+    pairs = sample_pairs(d, np.random.default_rng(0), per_obj=2)
+    kw = dict(level=1, n_sample=12, seed=0, device="cpu", atlas_episodes=4)
+    a = measure_sigma_structure(m, d, pairs, batch_eps=1, **kw)
+    b = measure_sigma_structure(m, d, pairs, batch_eps=64, **kw)
+    assert a["n_sample"] == b["n_sample"]
+    for name in ("row_norm", "effective_rank", "activation", "write_concentration"):
+        assert flat(a[name]) == pytest.approx(flat(b[name]), rel=1e-6, abs=1e-9), name
+
+
+def test_structure_failure_does_not_abort_the_probe_run(tiny_data, tmp_path, monkeypatch):
+    import hbwm.probes.run as run_mod
+
+    torch.manual_seed(0)
+    run_dir = _write_ckpt(tmp_path, HBWMCore(TINY_BDH), "bdh", vars(TINY_BDH))
+    monkeypatch.setattr(run_mod, "measure_sigma_structure",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    cfg = Study2Config(**{**vars(SMOKE), "structure": True})
+    out = run_probes_study2(run_dir, tiny_data.out_dir, cfg, device="cpu")
+    assert out["specs"] == ["flat_linear_L1", "mlp_rownorm_L1", "query_rank_1_L1"]
+    assert "boom" in out["structure_error"]
+    assert not (run_dir / "probes2" / "sigma_structure_L1.json").exists()

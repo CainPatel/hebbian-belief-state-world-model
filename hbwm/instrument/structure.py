@@ -9,6 +9,8 @@ measurements ask whether sigma is *structurally* sparse or low rank, which H4 ne
 import numpy as np
 import torch
 
+from hbwm.device import release_memory
+
 TOP_FRACTIONS = (0.01, 0.10)  # spec 4.8 measurement 4
 
 
@@ -107,3 +109,72 @@ def atlas_selectivity(tok_mean, token_counts) -> dict:
             "normalized_entropy": _summary(ent) if ent.numel() else dict(NAN_SUMMARY),
             "frac_max_share_above_half": frac_peaked,
             "n_tokens": v, "n_neurons_live": int(live.sum())}
+
+
+@torch.no_grad()
+def measure_sigma_structure(model, data, pairs, level: int, n_sample: int = 1024, seed: int = 0,
+                            device=None, atlas_episodes: int = 500, batch_eps: int = 32) -> dict:
+    """All five spec 4.8 measurements for one checkpoint-level. EXPLORATORY: decides nothing.
+
+    Measurements 1, 2 and 4 are per example and use a fixed seeded subsample of `n_sample` eligible
+    pairs, because measurement 2 needs one SVD of an [N, D] matrix per head per example.
+
+    The sampled episodes are driven `batch_eps` at a time (32, as in `PRESETS["study1"]`). One pass
+    over all of them at the preregistered n_sample = 1024 would hold a [n_layer, B, nh, N, D] fp32
+    sigma -- about 12.6 GB at B = 1024 -- for the whole pass, on top of the probe modules still
+    resident from the same level. Chunking is numerically exact rather than an approximation: the
+    write-mass accumulator is per-episode independent, every measurement is per example, and every
+    reported number is an order-independent summary. Each chunk therefore starts from its OWN
+    zero-initialized accumulator; `w` never spans chunks, whose episodes are unrelated.
+    """
+    from hbwm.bdh.upstream.bdh import Attention
+    from hbwm.envs import tokenizer as tk
+    from hbwm.instrument.atlas import build_atlas
+    from hbwm.instrument.recorder import SigmaRecorder
+
+    device = device if device is not None else next(model.parameters()).device
+    rng = np.random.default_rng(seed)
+    take = rng.choice(len(pairs), size=min(n_sample, len(pairs)), replace=False)
+    p = pairs.subset(np.sort(take))
+    gamma2 = float(model.hcfg.decay_gamma) ** 2
+    obs_pos = tk.obs_positions(data.L)
+    sig, xs, wmass = [], [], []
+    all_eps = np.unique(p.ep)
+    rec = SigmaRecorder(model)
+    for b0 in range(0, len(all_eps), batch_eps):
+        eps = all_eps[b0 : b0 + batch_eps]
+        row_of_ep = {int(e): i for i, e in enumerate(eps)}
+        by_pos = {}
+        for i in range(len(p)):
+            r_i = row_of_ep.get(int(p.ep[i]))
+            if r_i is not None:
+                by_pos.setdefault(int(obs_pos[p.t[i]]), []).append(r_i)
+        tokens = torch.from_numpy(data.tokens[eps].astype(np.int64)).to(device)
+        w = torch.zeros(model.hcfg.n_head, model.hcfg.n_neurons, len(eps), device=device)
+
+        def fn(pos, payload, by_pos=by_pos, w=w):
+            u = payload["x_sparse"][level]  # B, nh, N
+            q = Attention.rope((float(pos) * model.attn.freqs).view(1, 1, -1), u)
+            xn = payload["resid"][level].pow(2).sum(-1)  # B
+            w.mul_(gamma2).add_(torch.einsum("bhn,b->hnb", q.pow(2), xn))
+            if pos in by_pos:
+                r = torch.as_tensor(by_pos[pos], device=device)
+                sig.append(payload["sigma"][level][r].float().cpu())
+                xs.append(u[r].float().cpu())
+                wmass.append(w.permute(2, 0, 1)[r].float().cpu())
+
+        # positions=None on purpose: the write-mass accumulator must run at EVERY step, not only at
+        # the sampled ones, so the callback fires each step and stores only where `pos in by_pos`.
+        rec.run(tokens, None, fn)
+        del tokens, w, fn  # the chunk's device state, before the next chunk allocates its own
+        release_memory(device)
+    sigma = torch.cat(sig)
+    _, tok_mean = build_atlas(model, data, n_episodes=atlas_episodes, device=device,
+                              return_means=True)
+    counts = np.bincount(data.tokens[:atlas_episodes].reshape(-1).astype(np.int64),
+                         minlength=model.hcfg.vocab_size)
+    return {"row_norm": row_norm_stats(sigma), "effective_rank": effective_rank(sigma),
+            "activation": activation_sparsity(torch.cat(xs)),
+            "write_concentration": write_concentration(torch.cat(wmass)),
+            "atlas_selectivity": atlas_selectivity(tok_mean[level], counts),
+            "n_sample": int(sigma.shape[0]), "level": level, "exploratory": True}

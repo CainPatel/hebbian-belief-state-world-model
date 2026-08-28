@@ -17,6 +17,7 @@ from hbwm.envs import tokenizer as tk
 from hbwm.envs.dataset import EpisodeData
 from hbwm.instrument.atlas import build_atlas, save_atlas
 from hbwm.instrument.features import feature_dim, n_levels, neuron_of_feature
+from hbwm.instrument.structure import measure_sigma_structure
 from hbwm.probes.eligibility import BUCKET_NAMES, PairSet, h3_pairs, sample_pairs
 from hbwm.probes.extract import collect_many, iter_features
 from hbwm.probes.probe import (
@@ -388,6 +389,14 @@ def run_probes_study2(run_dir, data_dir, cfg: Study2Config, device=None) -> dict
                                          specs, cfg, n_classes, device, out, cache, level, obs_pos,
                                          chance, ceiling))
             _stage_boundary(f"study2:L{level}", device)
+            if cfg.structure and is_bdh:
+                try:  # exploratory (spec 4.8): must never cost the preregistered probe results
+                    s = measure_sigma_structure(model, d_tr, p_tr, level, cfg.structure_n_sample,
+                                                cfg.seed, device)
+                    (out / f"sigma_structure_L{level}.json").write_text(json.dumps(s, indent=2) + "\n")
+                except Exception as e:
+                    summary_errors.append(repr(e))
+                _stage_boundary(f"study2:L{level}:structure", device)
         if cfg.bridge and not is_bdh:  # spec 5.1 cross-study bridge row; decides nothing
             p_bridge = stratified_subsample(p_tr_all, cfg.n_train_bridge, rng)
             b = _study2_level(model, shape, freqs, (d_tr, d_va, d_te), (p_bridge, p_va, p_te),
