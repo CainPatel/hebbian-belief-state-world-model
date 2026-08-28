@@ -125,3 +125,102 @@ def test_h8_low_coverage_flag_trips_only_above_25_percent():
     d = _stack(eps)
     r = h8_latency(d["p_old"], d["p_new"], d["steps"], d["ep"], d["visible"])
     assert r["excluded_frac"] == 0.1 and r["low_coverage"] is False
+
+
+# --- Fix round 1: boundary tests (promoted minors) -------------------------------------------
+
+
+def test_h5_exact_005_margin_is_not_supported():
+    # mean_diff lands on exactly 0.05 (verified via the literal, not an approximation);
+    # every paired diff is still strictly positive, so only the strict `> margin` boundary is at play.
+    flat = [0.10, 0.11, 0.12]
+    structured = [0.15, 0.16, 0.17]
+    d = h5_decision(structured, flat)
+    assert d["mean_diff"] == 0.05
+    assert d["supported"] is False
+
+
+def test_h6_exact_005_margin_is_not_supported():
+    bdh = [0.15, 0.16, 0.17]
+    lstm = [0.10, 0.11, 0.12]  # mean_diff exactly 0.05 against bdh
+    rwkv = [0.05, 0.06, 0.07]  # comfortably clears the margin on its own
+    d = h6_decision(bdh, {"lstm": lstm, "rwkv": rwkv}, family="query_rank_4",
+                    saturated={"lstm": False, "rwkv": False})
+    assert d["comparators"]["lstm"]["mean_diff"] == 0.05
+    assert d["supported"] is False
+    assert d["kill_criterion_fired"] is True
+
+
+def test_h5_exact_zero_paired_diff_is_not_supported_even_with_a_wide_margin():
+    # mean margin clears 0.05 by a wide margin, but the third seed's paired diff is exactly zero.
+    structured = [0.30, 0.30, 0.09]
+    flat = [0.10, 0.10, 0.09]
+    d = h5_decision(structured, flat)
+    assert d["mean_diff"] > 0.05
+    assert d["paired_diffs"][-1] == 0.0
+    assert d["supported"] is False
+
+
+def test_degeneracy_train_acc_exactly_at_the_bar_is_not_memorizing():
+    train = {"0.001/0": 0.95}
+    val = {"0.001/0": 0.01}
+    d = is_degenerate(train, val, chance=0.011)
+    assert d["per_l2"]["0.001"]["memorizing"] is False
+    assert d["degenerate"] is False
+
+
+def test_degeneracy_val_acc_exactly_at_twice_chance_is_not_memorizing():
+    train = {"0.001/0": 0.99}
+    val = {"0.001/0": 0.022}  # exactly val_factor * chance
+    d = is_degenerate(train, val, chance=0.011)
+    assert d["val_bar"] == 0.022
+    assert d["per_l2"]["0.001"]["memorizing"] is False
+    assert d["degenerate"] is False
+
+
+def test_h8_excluded_frac_exactly_025_does_not_trip_low_coverage():
+    # 1 excluded out of 4 total = exactly 0.25; the flag needs strictly more than the cap.
+    excluded = _episode(0, [0, 1], [True, True], flip_at=None)
+    scored = [_episode(i, [0, 1], [False, False], flip_at=0) for i in (1, 2, 3)]
+    d = _stack([excluded, *scored])
+    r = h8_latency(d["p_old"], d["p_new"], d["steps"], d["ep"], d["visible"])
+    assert r["excluded_frac"] == 0.25
+    assert r["low_coverage"] is False
+
+
+def test_h8_latency_of_exactly_5_passes_and_6_fails():
+    steps = [0, 1, 2, 3, 4, 5, 6]
+    visible = [False] * len(steps)
+    passes = _episode(0, steps, visible, flip_at=5)   # t0 = 0, latency = 5
+    fails = _episode(1, steps, visible, flip_at=6)     # t0 = 0, latency = 6
+    d = _stack([passes, fails])
+    r = h8_latency(d["p_old"], d["p_new"], d["steps"], d["ep"], d["visible"])
+    assert r["latencies"] == [5, 6]
+    assert r["frac_le5"] == 0.5  # only the latency-5 episode counts as a pass
+
+
+def test_h8_frac_le5_exactly_070_is_supported():
+    # 7 of 10 scored episodes have latency 5 (pass); 3 have latency 6 (fail). 7/10 = 0.70 exactly.
+    steps = [0, 1, 2, 3, 4, 5, 6]
+    visible = [False] * len(steps)
+    eps = [_episode(i, steps, visible, flip_at=5) for i in range(7)]
+    eps += [_episode(i, steps, visible, flip_at=6) for i in range(7, 10)]
+    d = _stack(eps)
+    r = h8_latency(d["p_old"], d["p_new"], d["steps"], d["ep"], d["visible"])
+    assert r["frac_le5"] == 0.7
+    assert r["supported"] is True
+
+
+def test_h8_latency_is_unchanged_by_shuffled_row_order():
+    """A row-ordering bug would silently corrupt every latency; pin it with a shuffled episode."""
+    steps_sorted = [0, 1, 2, 3, 4, 5]
+    visible_sorted = [True, True, False, False, False, False]
+    ep = _episode(0, steps_sorted, visible_sorted, flip_at=5)
+    r_sorted = h8_latency(ep["p_old"], ep["p_new"], ep["steps"], ep["ep"], ep["visible"])
+    assert r_sorted["latencies"] == [3]
+
+    perm = np.array([5, 0, 3, 1, 4, 2])
+    shuffled = {k: np.asarray(v)[perm] for k, v in ep.items()}
+    r_shuffled = h8_latency(shuffled["p_old"], shuffled["p_new"], shuffled["steps"],
+                             shuffled["ep"], shuffled["visible"])
+    assert r_shuffled["latencies"] == r_sorted["latencies"] == [3]

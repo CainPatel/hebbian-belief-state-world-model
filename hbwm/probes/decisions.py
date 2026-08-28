@@ -58,6 +58,8 @@ def h4_k90(acc_by_k, acc_all, n_features):
 
 def _paired(a, b, margin):
     a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    if len(a) != len(b):
+        raise ValueError(f"_paired: length mismatch, got {len(a)} and {len(b)}")
     diffs = a - b
     return {"mean": float(b.mean()), "mean_diff": float(a.mean() - b.mean()),
             "paired_diffs": diffs.tolist(),
@@ -80,6 +82,9 @@ def h6_decision(bdh_accs, baselines, family, saturated=None, margin=0.05):
     `supported`, it changes how the verdict must be read.
     """
     saturated = saturated or {}
+    missing = sorted({"lstm", "rwkv"} - baselines.keys())
+    if missing:
+        raise ValueError(f"h6_decision requires both lstm and rwkv baselines, missing: {missing}")
     out = {"supported": True, "margin": margin, "family": family,
            "bdh_mean": float(np.mean(bdh_accs)), "comparators": {}}
     for name, accs in baselines.items():
