@@ -1,0 +1,19 @@
+{
+  "exp": "study2",
+  "src_exp": "study1",
+  "lr": 0.003,
+  "seeds": [0, 1, 2],
+  "models": ["bdh_g100", "lstm", "rwkv"],
+  "bdh_levels": {"0": [3, 4], "1": [3], "2": [4]},
+  "families": [],
+  "l2_grid": [0.0001, 0.001, 0.01, 0.1],
+  "ranks": [1, 4, 16],
+  "n_restarts": 3,
+  "epochs": 20,
+  "batch": 512,
+  "n_train": 24000,
+  "n_train_bridge": 61400,
+  "randproj_dim": 4096,
+  "randproj_density": 64,
+  "structure_subsample": 1024
+}
