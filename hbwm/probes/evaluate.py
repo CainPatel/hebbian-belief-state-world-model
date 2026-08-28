@@ -20,6 +20,7 @@ from hbwm.probes.decisions import (
 )
 from hbwm.probes.eligibility import BUCKET_NAMES
 from hbwm.probes.run import val_best
+from hbwm.probes.structured import MLP_HIDDEN
 
 BDH_STEMS = ["bdh_g100"] + GAMMA_ARMS
 BASELINES = ["lstm", "rwkv"]
@@ -304,7 +305,7 @@ def _best_per_family(probes):
     return best
 
 
-def aggregate_study2(root, exp="study1", src_exp="study1", data_dir=None) -> dict:
+def aggregate_study2(root, exp="study1", data_dir=None) -> dict:
     """Spec sections 7 and 8. `exp` is the experiment tree Study 1 trained into: Study 2 probes the
     same checkpoints and writes beside them, under `<root>/<exp>/<stem>_lr0.003/seed<n>/probes2`."""
     per_model = {stem: {seed: _best_per_family(_load_study2(root, exp, stem, seed))
@@ -405,7 +406,8 @@ def aggregate_study2(root, exp="study1", src_exp="study1", data_dir=None) -> dic
             h7["context_mlp_randproj"] = ctx
     bridge = {m: _bridge_rows(root, exp, m) for m in ("lstm", "rwkv")}
     return {"table": table, "h5": h5, "h6": h6, "h7": h7, "h8": _h8_all(root, exp),
-            "bridge": bridge, "structure": _structure_all(root, exp)}
+            "bridge": bridge, "structure": _structure_all(root, exp),
+            "randproj": _randproj_record(root, exp)}
 
 
 def _alias_key(key, other):
@@ -437,6 +439,26 @@ def _bridge_rows(root, exp, stem):
             "n_train": (out[min(out)]["n_train"] if out else None), "decides_nothing": True}
 
 
+def _randproj_record(root, exp):
+    """The `mlp_randproj` construction record (spec 4.5), from the first BDH seed that carries one.
+
+    `run.py` writes it into each run's `probes2/done.json`, and `runs/` is gitignored, so the record
+    only survives into RESULTS.md if aggregation carries it out. The projection is a deterministic
+    function of (n_in, n_out, density, seed), identical across seeds of a stem, so the first one found
+    speaks for the sweep. Returns None when no `done.json` carries the block -- older trees and the
+    tiny test fixtures -- and the results.md line is then omitted rather than printed empty.
+    """
+    for stem in ("bdh_g100",):
+        for seed in (0, 1, 2):
+            done = _probes2_dir(root, exp, stem, seed) / "done.json"
+            if not done.exists():
+                continue
+            rp = json.loads(done.read_text()).get("randproj")
+            if rp:
+                return {**rp, "source": f"{stem}/seed{seed}"}
+    return None
+
+
 def _h8_all(root, exp):
     """The H8 readout of the checkpoint's best spec; `done.json["h8_file"]` names the file."""
     out = {}
@@ -452,12 +474,22 @@ def _h8_all(root, exp):
             if f is None or not f.exists():
                 continue
             a = dict(np.load(f))
+            # `steps_since_reobs`, NOT the raw `t` in the same npz. It is a monotone per-episode
+            # shift of `t` (t minus that episode's re-observation step), so within an episode the
+            # ordering and every difference -- which is all h8_latency uses -- are identical, while
+            # the values are comparable across episodes. This is Study 1's `h3_latency` convention.
+            # Do not swap in `t`.
             rows.append(h8_latency(a["p_old"], a["p_new"], a["steps_since_reobs"], a["ep"],
                                    a["visible_now"]))
         if rows:
             out[stem] = {"per_seed": rows,
                          "mean_frac_le5": float(np.mean([r["frac_le5"] for r in rows])),
                          "mean_excluded_frac": float(np.mean([r["excluded_frac"] for r in rows])),
+                         # Spec 7 reports the excluded COUNT next to the fraction, so carry both.
+                         "excluded_n_per_seed": [r["n_excluded"] for r in rows],
+                         "total_n_per_seed": [r["n_total"] for r in rows],
+                         "excluded_n": int(sum(r["n_excluded"] for r in rows)),
+                         "total_n": int(sum(r["n_total"] for r in rows)),
                          "low_coverage": any(r["low_coverage"] for r in rows),
                          "supported": bool(np.mean([r["frac_le5"] for r in rows]) >= 0.7)}
     return out
@@ -488,12 +520,40 @@ def _exclusions_text(excluded):
 
 
 def _mlp_state_note(agg):
-    """The parameter count that makes BDH's `mlp_state` row read the way it does, from the table."""
+    """The parameter count that makes BDH's `mlp_state` row read the way it does, from the table.
+
+    Two numbers, both preregistered and easily confused: spec 5.2 names the FIRST-LAYER weight count
+    ("524,288 x 512 on BDH"), while Appendix B's `param_count` total also carries the second layer's
+    `MLP_HIDDEN x n_classes`. Print both, each labelled, so a reader knows which is which.
+    """
     r = agg["table"].get("bdh_g100", {}).get("mlp_state")
     if r is None or r["n_params"] is None:
         return ""
-    return (f" `mlp_state` on BDH has {r['n_params']:,} parameters against {r['n_train']:,} "
-            f"training examples, which is the number to read that row by.")
+    note = (f" `mlp_state` on BDH has {r['n_params']:,} weights in total against "
+            f"{r['n_train']:,} training examples, which is the number to read that row by.")
+    if r.get("n_input"):
+        note += (f" Of those, the first layer alone is {r['n_input']:,} x {MLP_HIDDEN} = "
+                 f"{r['n_input'] * MLP_HIDDEN:,} weights (spec 5.2); the remainder is the "
+                 f"{MLP_HIDDEN} x n_classes output layer of Appendix B's count.")
+    return note
+
+
+def _randproj_lines(agg):
+    """Spec 4.5's construction record for `mlp_randproj`, so the control is reproducible from here.
+
+    It reaches aggregation from a run's `probes2/done.json`, and `runs/` is gitignored, so this line
+    is the only path by which it survives into RESULTS.md. Absent -- an older tree, or a fixture --
+    the block is omitted rather than printed with holes in it.
+    """
+    rp = agg.get("randproj")
+    if not rp:
+        return []
+    return ["", f"Random projection (spec 4.5, `mlp_randproj`): a FIXED, not-learned sparse sign "
+            f"matrix with {_val(rp.get('nonzeros_per_output'))} nonzeros per output dimension, "
+            f"drawn with signs {rp.get('signs', [-1, 1])} from seed {_val(rp.get('seed'))}, mapping "
+            f"the {rp.get('applied_to', 'standardized flat sigma')} to "
+            f"{_val(rp.get('n_out'))} dimensions. Recorded per run in `probes2/done.json`; read here "
+            f"from {rp.get('source', 'the first BDH seed carrying it')}."]
 
 
 def write_outputs_study2(agg: dict, out_dir) -> None:
@@ -501,19 +561,24 @@ def write_outputs_study2(agg: dict, out_dir) -> None:
     out.mkdir(parents=True, exist_ok=True)
     for k in ("table", "h5", "h6", "h7", "h8", "bridge", "structure"):
         (out / f"{k}.json").write_text(json.dumps(agg[k], indent=2, default=float) + "\n")
+    if agg.get("randproj"):  # spec 4.5; absent on older trees and on the tiny fixtures
+        (out / "randproj.json").write_text(json.dumps(agg["randproj"], indent=2, default=float) + "\n")
     lines = ["## Study 2 probe accuracy (test, best level and hyperparameter per seed; mean over 3 "
              "seeds)",
              "", "| model | family | rank | eff. rank frac | saturated | degenerate | train acc "
-             "| acc | #params | n_train |",
-             "|---|---|---|---|---|---|---|---|---|---|"]
+             "| val acc | test acc | #params | n_train |",
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
     for stem, fams in agg["table"].items():
         for k, r in fams.items():
             # Rank, its effective fraction and the parameter count are chosen per seed: show every
             # seed's when the three disagree rather than one seed's as if it spoke for the arm.
             frac = _seed_cell(r["rank_fractions"], lambda v: f"{v:.2f}")
+            # Spec 5.2: every arm carries train, validation AND test accuracy. `val_mean` is the
+            # seed mean of the arm's selected (best-on-probe_val) accuracy, the quantity the arm was
+            # chosen by, so the selection is auditable from the published table alone.
             lines.append(f"| {stem} | {k} | {_seed_cell(r['ranks'])} | {frac} | {r['saturated']} "
                          f"| {r['degenerate']} | {r['train_acc_at_best']:.3f} "
-                         f"| {r['mean']:.3f} ± {r['std']:.3f} "
+                         f"| {r['val_mean']:.3f} | {r['mean']:.3f} ± {r['std']:.3f} "
                          f"| {_seed_cell(r['n_params_per_seed'])} | {r['n_train']} |")
     d0 = next(iter(next(iter(agg["table"].values())).values()))["degeneracy"]
     lines += ["", f"Degeneracy criterion (preregistered, spec 7): an arm is degenerate, and excluded "
@@ -527,6 +592,7 @@ def write_outputs_study2(agg: dict, out_dir) -> None:
               "norms of a 4 x 350 or 20 x 176 reshape are not a control and projecting 1,400 up to "
               "4,096 is an expansion. H6's family 5 comparison is therefore `mlp_state` against "
               "`mlp_state` against `mlp_state`; the reductions are context and feed H7."]
+    lines += _randproj_lines(agg)
     h5, h6, h7 = agg["h5"], agg["h6"], agg["h7"]
     lines += ["", f"## H5 (format and estimation) supported: **{h5['supported']}**", "",
               f"Best structured family `{h5['family']}` at {h5['structured_mean']:.3f} against "
@@ -557,15 +623,22 @@ def write_outputs_study2(agg: dict, out_dir) -> None:
                       f"**{ctx['attribute_to_capacity']}**.", ""]
     if agg["h8"]:
         lines += ["## H8 (belief revision, clock rebaselined to the first not-visible step)", "",
-                  "| model | mean frac(latency <= 5) | mean excluded frac | low coverage | supported |",
-                  "|---|---|---|---|---|"]
+                  # Spec 7: the excluded COUNT is reported next to the excluded fraction, so both
+                  # the summed count over the three seeds and its per-seed breakdown are here.
+                  "| model | mean frac(latency <= 5) | excluded n | episodes n | excluded n per seed "
+                  "| mean excluded frac | low coverage | supported |",
+                  "|---|---|---|---|---|---|---|---|"]
         for stem, r in agg["h8"].items():
-            lines.append(f"| {stem} | {r['mean_frac_le5']:.3f} | {r['mean_excluded_frac']:.3f} "
+            lines.append(f"| {stem} | {r['mean_frac_le5']:.3f} | {r['excluded_n']} | {r['total_n']} "
+                         f"| {r['excluded_n_per_seed']} | {r['mean_excluded_frac']:.3f} "
                          f"| {r['low_coverage']} | {r['supported']} |")
     lines += ["", "## Cross-study bridge rows (continuity only, decide nothing)", "",
-              "| model | flat_linear acc at 61,400 pairs |", "|---|---|"]
+              # The pair budget is read from the arm record, never spelled into the prose: a header
+              # that names a count the data does not carry is a table that contradicts itself.
+              "| model | flat_linear acc | n_train pairs |", "|---|---|---|"]
     for stem, r in agg["bridge"].items():
-        lines.append(f"| {stem} | {_fmt(np.mean(r['per_seed']) if r['per_seed'] else None)} |")
+        lines.append(f"| {stem} | {_fmt(np.mean(r['per_seed']) if r['per_seed'] else None)} "
+                     f"| {_val(r['n_train'])} |")
     (out / "results.md").write_text("\n".join(lines) + "\n")
 
 

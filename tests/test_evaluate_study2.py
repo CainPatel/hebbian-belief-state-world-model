@@ -1,6 +1,7 @@
 import json
 import re
 
+import numpy as np
 import pytest
 
 from hbwm.probes.evaluate import aggregate_study2, write_outputs_study2
@@ -21,7 +22,11 @@ FAMILIES_BASE = {
 }
 L2S = ["0.0001", "0.001", "0.01", "0.1"]
 # The real BDH `mlp_state` arm: the parameter count the degeneracy paragraph has to name (spec 7).
+# `N_INPUT` carries the real 524,288-wide BDH state so that the note's FIRST-LAYER figure of spec 5.2
+# (524,288 x 512 = 268,435,456) is the real one and not a fixture artifact. `N_PARAMS` is Appendix
+# B's total, which also counts the 512 x n_classes output layer -- the two must stay distinguishable.
 N_PARAMS = {"mlp_state": 268_476_928}
+N_INPUT = {"mlp_state": 524_288}
 
 # The reviewer's scenario for the rank ruling: BDH's own best arm is r=16, both baselines' own best
 # is r=1. Keying on the label would score the baselines at BDH's r=16 (0.10) instead of their own
@@ -59,10 +64,17 @@ def _write(run_dir, families, shape):
             "n_features": shape["rows"] * shape["cols"] * shape["n_heads"], "n_train": 24000,
             "chance": 0.011, "ceiling": 1.0, "ci95": [test_acc - 0.01, test_acc + 0.01],
             "rank_fraction": None if rank is None else min(1.0, rank / min(shape["rows"], shape["cols"])),
-            "saturated": sat, "n_params": N_PARAMS.get(_family_of(label), 1), "n_input": 1,
+            "saturated": sat, "n_params": N_PARAMS.get(_family_of(label), 1),
+            "n_input": N_INPUT.get(_family_of(label), 1),
             "input_kind": "flat", "n_restarts": 1,
             "bucket_acc": {}, "n_val": 100, "n_test": 100,
         }))
+    # The spec 5.1 bridge row. `_best_per_family` drops `*_bridge` labels, so it never becomes an
+    # arm; it exists here so the published bridge table's pair count comes from the record.
+    (run_dir / "probes2" / "flat_linear_bridge.json").write_text(json.dumps({
+        "family": "flat_linear", "rank": None, "level": None, "test_acc": 0.16,
+        "val_acc": {f"{a}/0": 0.16 for a in L2S}, "train_acc": {f"{a}/0": 0.28 for a in L2S},
+        "n_train": 61400, "decides_nothing": True}))
     (run_dir / "probes2" / "done.json").write_text(json.dumps({"shape": shape, "chance": 0.011}))
 
 
@@ -154,7 +166,18 @@ def test_write_outputs_study2_emits_a_markdown_table_with_rank_fractions(tmp_pat
     assert "| model | family | rank | eff. rank frac |" in md
     assert "saturated" in md and "degenerate" in md and "train acc" in md
     assert "Degeneracy criterion (preregistered, spec 7)" in md
-    assert "268,476,928" in md  # read from mlp_state's n_params, not hardcoded prose
+    # Both preregistered parameter figures, each unambiguously labelled and each read from
+    # mlp_state's own record rather than hardcoded prose: Appendix B's total, and spec 5.2's
+    # first-layer count. A reader must be able to tell which number is which.
+    assert "268,476,928 weights in total" in md
+    assert "first layer alone is 524,288 x 512 = 268,435,456 weights (spec 5.2)" in md
+    # Spec 5.2: train, validation AND test accuracy for every arm in the table.
+    assert "| train acc | val acc | test acc |" in md
+    assert "| 0.510 | 0.290 | 0.280 ± 0.000 |" in md  # bdh query_rank_4: train, val, test
+    # Spec 5.1 bridge rows: the pair budget is the record's `n_train`, never prose.
+    assert "| model | flat_linear acc | n_train pairs |" in md
+    assert "| lstm | 0.160 | 61400 |" in md
+    assert "61,400 pairs" not in md
     assert "{'mlp_state'" not in md  # the exclusions are prose, not a Python dict repr
     assert "`mlp_state` (degenerate on bdh)" in md
     assert (tmp_path / "study2" / "results2" / "h6.json").exists()
@@ -211,6 +234,81 @@ def test_exploratory_sigma_structure_files_are_not_probe_arms(tmp_path):
     assert agg["h6"]["family"] == "query_rank_r"
     # dropped from the arm table, but still carried in the exploratory section
     assert "bdh_g100/seed0/sigma_structure_L3" in agg["structure"]
+
+
+def _write_tree(tmp_path, families=None):
+    for stem, fams, shape in (("bdh_g100", families or FAMILIES_BDH,
+                               {"n_heads": 4, "rows": 2048, "cols": 64}),
+                              ("lstm", FAMILIES_BASE, {"n_heads": 1, "rows": 4, "cols": 350}),
+                              ("rwkv", FAMILIES_BASE, {"n_heads": 1, "rows": 20, "cols": 176})):
+        for seed in (0, 1, 2):
+            _write(tmp_path / "study2" / f"{stem}_lr0.003" / f"seed{seed}", fams, shape)
+
+
+RANDPROJ = {"n_out": 4096, "nonzeros_per_output": 64, "seed": 0, "fixed_not_learned": True,
+            "signs": [-1, 1], "applied_to": "standardized_flat_sigma"}
+
+
+def test_the_randproj_construction_record_reaches_the_published_results(tmp_path):
+    """Spec 4.5 makes the projection's construction a reporting requirement. `run.py` writes it to
+    each run's `probes2/done.json` and `runs/` is gitignored, so aggregation is the only path by
+    which it survives into RESULTS.md."""
+    _write_tree(tmp_path)
+    for seed in (0, 1, 2):
+        d = tmp_path / "study2" / "bdh_g100_lr0.003" / f"seed{seed}" / "probes2" / "done.json"
+        d.write_text(json.dumps({"shape": {"n_heads": 4, "rows": 2048, "cols": 64},
+                                 "chance": 0.011, "randproj": RANDPROJ}))
+    agg = aggregate_study2(tmp_path, exp="study2")
+    assert agg["randproj"]["nonzeros_per_output"] == 64
+    assert agg["randproj"]["seed"] == 0
+    assert agg["randproj"]["source"] == "bdh_g100/seed0"
+    write_outputs_study2(agg, tmp_path / "study2" / "results2")
+    md = (tmp_path / "study2" / "results2" / "results.md").read_text()
+    assert "Random projection (spec 4.5, `mlp_randproj`)" in md
+    assert "64 nonzeros per output dimension" in md
+    assert "from seed 0" in md and "4096 dimensions" in md
+    assert "FIXED, not-learned" in md
+    assert (tmp_path / "study2" / "results2" / "randproj.json").exists()
+
+
+def test_a_tree_without_a_randproj_record_omits_the_line(tmp_path):
+    """Older trees and the tiny fixtures carry no `randproj` block; aggregation must not break."""
+    _write_tree(tmp_path)
+    agg = aggregate_study2(tmp_path, exp="study2")
+    assert agg["randproj"] is None
+    write_outputs_study2(agg, tmp_path / "study2" / "results2")
+    md = (tmp_path / "study2" / "results2" / "results.md").read_text()
+    assert "Random projection (spec 4.5" not in md
+    assert not (tmp_path / "study2" / "results2" / "randproj.json").exists()
+
+
+def test_h8_reports_the_excluded_count_beside_the_excluded_fraction(tmp_path):
+    """Spec 7: the excluded COUNT and the excluded fraction are both reported next to the
+    statistic. Episode 0 has a not-visible step and flips at once; episode 1 never leaves the
+    window, so it is excluded from the denominator rather than counted as a failure."""
+    _write_tree(tmp_path)
+    for stem, shape in (("bdh_g100", {"n_heads": 4, "rows": 2048, "cols": 64}),
+                        ("lstm", {"n_heads": 1, "rows": 4, "cols": 350}),
+                        ("rwkv", {"n_heads": 1, "rows": 20, "cols": 176})):
+        for seed in (0, 1, 2):
+            d = tmp_path / "study2" / f"{stem}_lr0.003" / f"seed{seed}" / "probes2"
+            np.savez(d / "best_h8.npz",
+                     p_old=np.array([0.9, 0.1, 0.1, 0.9, 0.9]),
+                     p_new=np.array([0.1, 0.8, 0.8, 0.1, 0.1]),
+                     steps_since_reobs=np.array([0, 1, 2, 0, 1]),
+                     ep=np.array([0, 0, 0, 1, 1]),
+                     visible_now=np.array([True, False, False, True, True]))
+            (d / "done.json").write_text(json.dumps({"shape": shape, "chance": 0.011,
+                                                     "h8_file": "best_h8.npz"}))
+    agg = aggregate_study2(tmp_path, exp="study2")
+    h8 = agg["h8"]["bdh_g100"]
+    assert h8["excluded_n_per_seed"] == [1, 1, 1]
+    assert h8["excluded_n"] == 3 and h8["total_n"] == 6
+    assert h8["mean_excluded_frac"] == pytest.approx(0.5)
+    write_outputs_study2(agg, tmp_path / "study2" / "results2")
+    md = (tmp_path / "study2" / "results2" / "results.md").read_text()
+    assert "| excluded n | episodes n | excluded n per seed | mean excluded frac |" in md
+    assert "| bdh_g100 | 1.000 | 3 | 6 | [1, 1, 1] | 0.500 |" in md
 
 
 def test_an_empty_tree_names_the_directory_it_read(tmp_path):
