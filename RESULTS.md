@@ -622,7 +622,9 @@ of the saved artifacts and as the finding most worth following up.
 ## Study 2 preregistration
 
 Decision rules: see README.md, "Preregistration (Study 2)". Preregistration commit:
-`<hash filled in Step 5>`.
+`be8290e2f38cd30db336761db3aa733b2ad4b2ee`, tagged `study2-prereg`. Study 1's equivalent anchor was
+`e674b1da138f905670dde5571e1a1890b134fe36`. Every Study 2 number reported below was produced by runs
+started after that commit was pushed to public `main`.
 
 ## Study 2 headline (filled by Task 15)
 
