@@ -14,7 +14,7 @@ import torch.nn.functional as F  # noqa: F401
 from torch import nn
 
 from hbwm.bdh.core import HBWMCore
-from hbwm.bdh.upstream.bdh import Attention  # noqa: F401
+from hbwm.bdh.upstream.bdh import Attention
 from hbwm.probes.probe import STATS_MAX_ELEMS, feature_stats  # noqa: F401
 
 STUDY2_RANKS = (1, 4, 16)  # spec 4.2, selected on probe_val
@@ -211,3 +211,50 @@ def apply_randproj(x, idx, sign) -> np.ndarray:
     """x: [B, n_in] -> [B, n_out] float32. Gathers `density` columns per output dimension."""
     x = np.asarray(x, dtype=np.float32)
     return np.einsum("bod,od->bo", x[:, idx], sign, optimize=True).astype(np.float32)
+
+
+def derotate(sigma, t, freqs):
+    """Apply R(-t) along the row (neuron) axis of sigma [..., nh, P, Q] (spec 4.4, Appendix A).
+
+    `Attention.rope` rotates interleaved pairs of the LAST axis, so transpose the row axis into place,
+    rotate with phases -t * freqs, and transpose back. `t` is the absolute TOKEN position of the
+    feature timestep, i.e. `tokenizer.obs_positions(L)[t_env]`, not the environment step index.
+    """
+    t = torch.as_tensor(t, dtype=torch.float32, device=sigma.device).reshape(-1)
+    phases = (-t).view(-1, 1, 1, 1) * freqs.to(sigma.device).view(1, 1, 1, -1)
+    return Attention.rope(phases, sigma.transpose(-1, -2)).transpose(-1, -2)
+
+
+class DerotProbe(StructuredProbe):
+    """Spec 4.4: derotate, then delegate to any inner family.
+
+    On a state with no rotary phase there is nothing to undo, so the matched baseline definition is the
+    inner probe itself (spec 5.1); `build_family` returns the bare inner probe in that case and never
+    constructs this wrapper.
+    """
+
+    def __init__(self, inner: StructuredProbe, shape: StateShape, freqs, mean=None, std=None):
+        super().__init__(shape.n_features, inner.n_classes, mean, std)
+        self.inner, self.shape = inner, shape
+        self.register_buffer("freqs", torch.as_tensor(freqs, dtype=torch.float32).reshape(shape.rows))
+        del self.bias  # the inner probe owns the bias
+
+    def set_positions(self, t) -> None:
+        super().set_positions(t)
+        self.inner.set_positions(None)
+
+    def readout_parameters(self):
+        return self.inner.readout_parameters()
+
+    def forward(self, x, t=None):
+        pos = self._positions if t is None else t
+        if pos is None:
+            raise ValueError("DerotProbe needs absolute token positions: pass t or call set_positions")
+        s = self.shape
+        # Derotate the RAW row FIRST, then standardize in the derotated frame (spec 4.4). The two do
+        # not commute: standardization scales each (h, n, d) separately while the rotation mixes the
+        # pairs (2j, 2j+1) at fixed d, so the other order rotates a distorted space instead of undoing
+        # RoPE. The inner probe is built with identity mean/std, and because the order lives here both
+        # fitting and the streamed passes get exactly the same input distribution.
+        z = x.view(-1, s.n_heads, s.rows, s.cols)
+        return self.inner(self.standardize(derotate(z, pos, self.freqs).reshape(x.shape[0], -1)))
