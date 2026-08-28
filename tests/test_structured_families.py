@@ -1,9 +1,12 @@
 import numpy as np
+import pytest
 import torch
 
 from hbwm.probes.structured import (
     MLP_HIDDEN,
+    STUDY2_RESTARTS,
     DerotProbe,
+    FamilySpec,
     FlatLinearProbe,
     MLPProbe,
     QueryRankProbe,
@@ -203,3 +206,41 @@ def test_derot_families_wrap_only_on_a_rotary_state():
     spec = next(s for s in family_specs(tiny) if spec_label(s) == "derot_query_rank_4")
     p = build_family(spec, tiny, C, tiny.n_features, freqs=torch.rand(tiny.rows))
     assert isinstance(p, DerotProbe) and isinstance(p.inner, _QRP)
+
+
+def test_derot_families_alias_the_plain_family_on_a_non_rotary_state():
+    """Spec 5.1: on a state with no rotary phase, derot_* IS its undecorated counterpart."""
+    tiny = StateShape(n_heads=1, rows=4, cols=6, rotary=False)
+    p_flat = build_family(FamilySpec("derot_flat_linear"), tiny, C, tiny.n_features)
+    assert not isinstance(p_flat, DerotProbe) and isinstance(p_flat, FlatLinearProbe)
+
+    p_qr = build_family(
+        FamilySpec("derot_query_rank_r", 2, n_restarts=STUDY2_RESTARTS), tiny, C, tiny.n_features
+    )
+    assert not isinstance(p_qr, DerotProbe) and isinstance(p_qr, _QRP)
+
+
+def test_derot_flat_linear_alias_matches_the_plain_probe_bit_for_bit_on_a_baseline():
+    """The alias is not merely the same class: same seed/mean/std must yield identical params."""
+    tiny = StateShape(n_heads=1, rows=4, cols=6, rotary=False)
+    mean = torch.randn(tiny.n_features)
+    std = torch.rand(tiny.n_features) + 0.5
+
+    gen_plain = torch.Generator().manual_seed(0)
+    p_plain = build_family(FamilySpec("flat_linear"), tiny, C, tiny.n_features, mean, std, gen=gen_plain)
+
+    gen_derot = torch.Generator().manual_seed(0)
+    p_derot = build_family(
+        FamilySpec("derot_flat_linear"), tiny, C, tiny.n_features, mean, std, gen=gen_derot
+    )
+
+    assert isinstance(p_derot, FlatLinearProbe) and not isinstance(p_derot, DerotProbe)
+    assert torch.allclose(p_plain.weight, p_derot.weight)
+    assert torch.allclose(p_plain.bias, p_derot.bias)
+
+
+def test_derot_family_on_a_rotary_state_requires_freqs():
+    tiny = StateShape(n_heads=2, rows=8, cols=4, rotary=True)
+    spec = FamilySpec("derot_query_rank_r", 2, n_restarts=STUDY2_RESTARTS)
+    with pytest.raises(ValueError):
+        build_family(spec, tiny, C, tiny.n_features, freqs=None)
