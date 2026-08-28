@@ -253,18 +253,48 @@ def _study2_val(r):
     return max(r["val_acc"].values())
 
 
+def _probes2_dir(root, exp, stem, seed):
+    return Path(root) / exp / f"{stem}_lr{STUDY2_LR:g}" / f"seed{seed}" / "probes2"
+
+
 def _load_study2(root, exp, stem, seed):
-    d = Path(root) / exp / f"{stem}_lr{STUDY2_LR:g}" / f"seed{seed}" / "probes2"
-    return {p.stem: json.loads(p.read_text()) for p in d.glob("*.json") if p.name != "done.json"}
+    """The probe-arm records in one checkpoint's `probes2/`, keyed by label.
+
+    Filtered POSITIVELY, on the two accuracy grids every arm record carries. The same directory also
+    holds `done.json` and the exploratory `sigma_structure_L*.json` files of spec 4.8 (which
+    `_structure_all` reads from here). Those are not probe arms. A blacklist would have to name each
+    new one, and missing one would put a record with no `train_acc` into the results table and kill
+    the aggregation on a KeyError, a day and a half after the sweep it summarises.
+    """
+    out = {}
+    for p in sorted(_probes2_dir(root, exp, stem, seed).glob("*.json")):
+        r = json.loads(p.read_text())
+        if isinstance(r, dict) and "val_acc" in r and "train_acc" in r:
+            out[p.stem] = r
+    return out
 
 
 def _family_key(label, r):
-    """Collapse a per-level, per-rank label to its family key: 'query_rank_4' from 'query_rank_4_L3'."""
-    return label.split("_L")[0]
+    """The family a probe arm belongs to, read from the record's own `family` field.
+
+    Rank is a per-model hyperparameter selected on `probe_val` (spec 4.2, 5.2 and 7), NOT part of
+    family identity: `query_rank_1`, `query_rank_4` and `query_rank_16` are three arms of the single
+    family `query_rank_r`, exactly as the `_L<level>` suffix marks arms of one family at different
+    levels. Task 7 writes `"family": spec.name`, so the record already carries the key. Collapsing
+    here is what lets every model choose its OWN best rank and level; keying on the label instead
+    would score the baselines at whatever rank BDH happened to win with, which is the comparison
+    spec decision 4 names as the failure mode that would invalidate the headline.
+    """
+    return r["family"]
+
+
+def _agree(vals):
+    """The one value all the seeds chose, or None if they disagree."""
+    return vals[0] if all(v == vals[0] for v in vals) else None
 
 
 def _best_per_family(probes):
-    """For each family key, the entry with the highest probe_val accuracy (best level and best l2)."""
+    """For each family, the arm with the highest probe_val accuracy: its best level AND best rank."""
     best = {}
     for label, r in probes.items():
         if label.endswith("_bridge"):
@@ -275,7 +305,9 @@ def _best_per_family(probes):
     return best
 
 
-def aggregate_study2(root, exp="study2", src_exp="study1", data_dir=None) -> dict:
+def aggregate_study2(root, exp="study1", src_exp="study1", data_dir=None) -> dict:
+    """Spec sections 7 and 8. `exp` is the experiment tree Study 1 trained into: Study 2 probes the
+    same checkpoints and writes beside them, under `<root>/<exp>/<stem>_lr0.003/seed<n>/probes2`."""
     per_model = {stem: {seed: _best_per_family(_load_study2(root, exp, stem, seed))
                         for seed in (0, 1, 2)}
                  for stem in STUDY2_MODELS}
@@ -292,6 +324,8 @@ def aggregate_study2(root, exp="study2", src_exp="study1", data_dir=None) -> dic
             va_mean = {kk: float(np.mean([r["val_acc"][kk] for r in rows])) for kk in acc_keys}
             deg = is_degenerate(tr_mean, va_mean, rows[0]["chance"])
             best_key = max(va_mean, key=va_mean.get)
+            ranks = [r["rank"] for r in rows]
+            fracs = [r["rank_fraction"] for r in rows]
             table[stem][k] = {
                 "train_acc_mean": tr_mean, "val_acc_mean": va_mean,
                 "train_acc_at_best": tr_mean[best_key], "degeneracy": deg,
@@ -300,34 +334,57 @@ def aggregate_study2(root, exp="study2", src_exp="study1", data_dir=None) -> dic
                 "mean": float(np.mean([r["test_acc"] for r in rows])),
                 "std": float(np.std([r["test_acc"] for r in rows])),
                 "labels": [by_seed[s][k][0] for s in (0, 1, 2)],
-                "rank": rows[0]["rank"], "rank_fraction": rows[0]["rank_fraction"],
-                "saturated": bool(rows[0]["saturated"]), "n_params": rows[0]["n_params"],
+                # Each seed picks its own rank on probe_val, so report all three; the scalars are
+                # filled in only when the seeds agree. `saturated` is ANY seed, deliberately: H6's
+                # rank-constraint artifact warning has to fire if any seed's baseline arm sat at the
+                # saturation rank, not only if all three did.
+                "ranks": ranks, "rank_fractions": fracs,
+                "rank": _agree(ranks), "rank_fraction": _agree(fracs),
+                "saturated": bool(any(r["saturated"] for r in rows)),
+                # n_params is a function of the chosen rank, so it moves with it.
+                "n_params_per_seed": [r["n_params"] for r in rows],
+                "n_params": _agree([r["n_params"] for r in rows]),
                 "n_train": rows[0]["n_train"], "n_features": rows[0]["n_features"],
                 "chance": rows[0]["chance"], "ceiling": rows[0]["ceiling"],
                 "ci95": [r["ci95"] for r in rows],
                 "val_mean": float(np.mean([_study2_val(r) for r in rows])),
             }
+    # Four different mistakes -- wrong --root, wrong --exp, an unfinished sweep, a family that failed
+    # on one seed -- all used to surface as a bare `max() iterable argument is empty` a day and a half
+    # after the compute was spent. Name the cause and the directory that was actually read.
+    empty = [m for m in STUDY2_MODELS if not table[m]]
+    if empty:
+        found = {m: {s: sorted(per_model[m][s]) for s in (0, 1, 2)} for m in empty}
+        raise RuntimeError(
+            f"no probe family present on all three seeds for {empty}; families found per seed: "
+            f"{found}; read from {_probes2_dir(root, exp, empty[0], 0)} and its seed1/seed2 "
+            f"siblings. Check --root and --exp, and that the Study 2 sweep finished for these runs.")
     bdh = table["bdh_g100"]
-    structured = {k: v for k, v in bdh.items()
-                  if any(k.startswith(f.replace("_rank_r", "_rank_")) or k == f
-                         for f in STRUCTURED_FAMILIES)}
+    structured = {k: v for k, v in bdh.items() if k in STRUCTURED_FAMILIES}
+    if not structured:
+        raise RuntimeError(f"H5 needs a structured family (families 2 to 4) on bdh_g100, one of "
+                           f"{list(STRUCTURED_FAMILIES)}; the families present are {sorted(bdh)}")
+    if "flat_linear" not in bdh:
+        raise RuntimeError(f"H5 needs bdh_g100's `flat_linear` arm on all three seeds; the families "
+                           f"present are {sorted(bdh)}")
     best_structured = max(structured, key=lambda k: structured[k]["val_mean"])
     h5 = h5_decision(structured[best_structured]["per_seed"], bdh["flat_linear"]["per_seed"])
     h5["family"] = best_structured
     # Spec 7: a family is eligible for H6 only if it is matched on all three states AND no arm of it,
     # on any state, is degenerate. Degenerate arms stay in `table` and in the results tables.
-
-    def _eligible(k):
-        if not all(_alias_key(k, table[m]) for m in ("lstm", "rwkv")):
-            return False
-        return not (bdh[k]["degenerate"]
-                    or any(_arm(table[m], k)["degenerate"] for m in ("lstm", "rwkv")))
-
-    excluded = {k: {"bdh": bdh[k]["degenerate"],
-                    **{m: _arm(table[m], k)["degenerate"] for m in ("lstm", "rwkv")}}
-                for k in bdh if all(_alias_key(k, table[m]) for m in ("lstm", "rwkv"))
-                and not _eligible(k)}
-    matched = [k for k in bdh if _eligible(k)]
+    matched, excluded = [], {}
+    for k in bdh:
+        # MATCHED_FAMILIES is the preregistered family set (spec 4.1 to 4.5). Membership is necessary
+        # but not sufficient: `mlp_rownorm` and `mlp_randproj` are in it and still never match,
+        # because `_alias_key` finds them no counterpart arm on either baseline.
+        if k not in MATCHED_FAMILIES or not all(_alias_key(k, table[m]) for m in ("lstm", "rwkv")):
+            continue
+        states = {"bdh": bdh[k]["degenerate"],
+                  **{m: _arm(table[m], k)["degenerate"] for m in ("lstm", "rwkv")}}
+        if any(states.values()):
+            excluded[k] = states
+        else:
+            matched.append(k)
     if not matched:
         raise RuntimeError(f"no eligible matched family for H6; degeneracy exclusions: {excluded}")
     best_matched = max(matched, key=lambda k: bdh[k]["val_mean"])
@@ -370,8 +427,7 @@ def _arm(other, key):
 def _bridge_rows(root, exp, stem):
     out = {}
     for seed in (0, 1, 2):
-        d = (Path(root) / exp / f"{stem}_lr{STUDY2_LR:g}" / f"seed{seed}" / "probes2"
-             / "flat_linear_bridge.json")
+        d = _probes2_dir(root, exp, stem, seed) / "flat_linear_bridge.json"
         if d.exists():
             out[seed] = json.loads(d.read_text())
     return {"per_seed": [out[s]["test_acc"] for s in sorted(out)] if out else [],
@@ -384,7 +440,7 @@ def _h8_all(root, exp):
     for stem in STUDY2_MODELS:
         rows = []
         for seed in (0, 1, 2):
-            d = Path(root) / exp / f"{stem}_lr{STUDY2_LR:g}" / f"seed{seed}" / "probes2"
+            d = _probes2_dir(root, exp, stem, seed)
             done = d / "done.json"
             if not done.exists():
                 continue
@@ -408,10 +464,33 @@ def _structure_all(root, exp):
     out = {}
     for stem in STUDY2_MODELS:
         for seed in (0, 1, 2):
-            d = Path(root) / exp / f"{stem}_lr{STUDY2_LR:g}" / f"seed{seed}" / "probes2"
+            d = _probes2_dir(root, exp, stem, seed)
             for f in (sorted(d.glob("sigma_structure_L*.json")) if d.exists() else []):
                 out[f"{stem}/seed{seed}/{f.stem}"] = json.loads(f.read_text())
     return out
+
+
+def _seed_cell(vals, fmt=str):
+    """One markdown cell for a per-seed value: the shared value, or every seed's if they disagree."""
+    cells = ["-" if v is None else fmt(v) for v in vals]
+    return cells[0] if all(c == cells[0] for c in cells) else "[" + ", ".join(cells) + "]"
+
+
+def _exclusions_text(excluded):
+    """The degeneracy exclusions as prose. The raw dict repr has no place in a published document."""
+    if not excluded:
+        return "none"
+    return "; ".join(f"`{k}` (degenerate on " + ", ".join(m for m, d in sorted(s.items()) if d) + ")"
+                     for k, s in sorted(excluded.items()))
+
+
+def _mlp_state_note(agg):
+    """The parameter count that makes BDH's `mlp_state` row read the way it does, from the table."""
+    r = agg["table"].get("bdh_g100", {}).get("mlp_state")
+    if r is None or r["n_params"] is None:
+        return ""
+    return (f" `mlp_state` on BDH has {r['n_params']:,} parameters against {r['n_train']:,} "
+            f"training examples, which is the number to read that row by.")
 
 
 def write_outputs_study2(agg: dict, out_dir) -> None:
@@ -426,20 +505,20 @@ def write_outputs_study2(agg: dict, out_dir) -> None:
              "|---|---|---|---|---|---|---|---|---|---|"]
     for stem, fams in agg["table"].items():
         for k, r in fams.items():
-            frac = "-" if r["rank_fraction"] is None else f"{r['rank_fraction']:.2f}"
-            lines.append(f"| {stem} | {k} | {_val(r['rank'])} | {frac} | {r['saturated']} "
+            # Rank, its effective fraction and the parameter count are chosen per seed: show every
+            # seed's when the three disagree rather than one seed's as if it spoke for the arm.
+            frac = _seed_cell(r["rank_fractions"], lambda v: f"{v:.2f}")
+            lines.append(f"| {stem} | {k} | {_seed_cell(r['ranks'])} | {frac} | {r['saturated']} "
                          f"| {r['degenerate']} | {r['train_acc_at_best']:.3f} "
-                         f"| {r['mean']:.3f} ± {r['std']:.3f} | {_val(r['n_params'])} "
-                         f"| {r['n_train']} |")
+                         f"| {r['mean']:.3f} ± {r['std']:.3f} "
+                         f"| {_seed_cell(r['n_params_per_seed'])} | {r['n_train']} |")
     d0 = next(iter(next(iter(agg["table"].values())).values()))["degeneracy"]
     lines += ["", f"Degeneracy criterion (preregistered, spec 7): an arm is degenerate, and excluded "
               f"from H6's best-matched-family selection, if its training accuracy exceeds "
               f"{d0['train_bar']:.2f} while its validation accuracy stays below {d0['val_bar']:.3f} "
               f"(twice the majority-class chance rate {d0['chance']:.3f}) at every L2 value. "
               f"Degenerate arms are still fitted and still reported above with their parameter count "
-              f"and training accuracy, so the call can be audited. `mlp_state` on BDH has "
-              f"268,476,928 parameters against 24,000 training examples, which is the number to read "
-              f"that row by."]
+              f"and training accuracy, so the call can be audited." + _mlp_state_note(agg)]
     lines += ["", "Family 5 membership: BDH carries `mlp_state` plus the two BDH-only reductions "
               "`mlp_rownorm` and `mlp_randproj`; each baseline carries `mlp_state` alone, because row "
               "norms of a 4 x 350 or 20 x 176 reshape are not a control and projecting 1,400 up to "
@@ -461,7 +540,7 @@ def write_outputs_study2(agg: dict, out_dir) -> None:
               f"Rank-constraint artifact warning: **{h6['artifact_warning']}**.", "",
               f"Families eligible for H6 after the degeneracy criterion: "
               f"{', '.join('`' + f + '`' for f in h6['eligible_families'])}. "
-              f"Excluded as degenerate: {h6['degeneracy_exclusions'] or 'none'}.", ""]
+              f"Excluded as degenerate: {_exclusions_text(h6['degeneracy_exclusions'])}.", ""]
     if h7:
         lines += ["## H7 (attribution, gates nothing)", "",
                   f"`{h7['mlp_family']}` at {h7['mlp_mean']:.3f} against `{h7['structured_family']}` "
