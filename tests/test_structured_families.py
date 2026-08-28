@@ -104,3 +104,34 @@ def test_apply_randproj_matches_the_explicit_dense_equivalent():
     for j in range(6):
         dense[idx[j], j] = sign[j]
     assert np.allclose(apply_randproj(x, idx, sign), x @ dense, atol=1e-5)
+
+
+def test_readout_parameters_excludes_every_bias_by_name():
+    # spec 4.7 item 1: the L2 penalty is weights only. Assert on parameter NAMES, not just counts,
+    # so a future rename of a weight or bias tensor can't silently re-admit a bias into the penalty.
+    flat = FlatLinearProbe(SHAPE, C)
+    ids = {id(p) for p in flat.readout_parameters()}
+    assert {n for n, p in flat.named_parameters() if id(p) in ids} == {"weight"}
+
+    qr = QueryRankProbe(SHAPE, C, rank=2)
+    ids = {id(p) for p in qr.readout_parameters()}
+    assert {n for n, p in qr.named_parameters() if id(p) in ids} == {"q", "v"}
+
+    mlp = MLPProbe(64, C)
+    ids = {id(p) for p in mlp.readout_parameters()}
+    assert {n for n, p in mlp.named_parameters() if id(p) in ids} == {"net.0.weight", "net.2.weight"}
+
+
+def test_mlp_probe_weight_only_count_matches_param_count():
+    p = MLPProbe(64, C)
+    learned = sum(t.numel() for n, t in p.named_parameters() if not n.endswith("bias"))
+    assert learned == param_count("mlp_state", SHAPE, C, n_input=64)
+
+
+def test_shared_query_applies_one_identical_query_bank_to_every_class():
+    torch.manual_seed(0)
+    p = QueryRankProbe(SHAPE, C, rank=2, shared_query=True)
+    W = p.flat_weight()
+    for c in range(C):
+        expected = torch.einsum("hjp,hjq->hpq", p.q, p.v[c])
+        assert torch.allclose(W[c], expected, atol=1e-6)

@@ -76,6 +76,9 @@ def param_count(family: str, shape: StateShape, n_classes: int, rank: int | None
     `n_input` is required for the mlp families, whose input width is set outside the module: the full
     state for `mlp_state` (524,288 on BDH), 8,192 for `mlp_rownorm`, 4,096 for `mlp_randproj`. The
     results table reports this for every arm so the degeneracy call of spec 7 can be audited.
+
+    This is the preregistered WEIGHT count: it excludes both the per-class bias every family shares
+    and, for the mlp families, the hidden-layer bias `MLPProbe` also carries.
     """
     C, nh, P, Q = n_classes, shape.n_heads, shape.rows, shape.cols
     if family.startswith("mlp_"):
@@ -124,8 +127,13 @@ class StructuredProbe(nn.Module):
         return (x - self.mean) / self.std
 
     def readout_parameters(self):
-        """Parameters the L2 penalty applies to (spec 4.7 item 1): everything except the bias."""
-        return [p for n, p in self.named_parameters() if n != "bias"]
+        """Parameters the L2 penalty applies to (spec 4.7 item 1): every weight, no biases.
+
+        Excludes any parameter whose name ends in "bias", not just the one literally named "bias":
+        this also excludes MLPProbe's hidden-layer bias (named "net.0.bias"), so the penalty is
+        exactly ||W||^2 for the flat and MLP families and ||q||^2 + ||v||^2 for the factorized ones.
+        """
+        return [p for n, p in self.named_parameters() if not n.endswith("bias")]
 
 
 class FlatLinearProbe(StructuredProbe):
