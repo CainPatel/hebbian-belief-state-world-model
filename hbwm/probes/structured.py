@@ -8,7 +8,7 @@ shared.
 
 import dataclasses
 
-import numpy as np  # noqa: F401
+import numpy as np
 import torch
 import torch.nn.functional as F  # noqa: F401
 from torch import nn
@@ -167,3 +167,39 @@ class QueryRankProbe(StructuredProbe):
         s = self.shape
         z = self.standardize(x).view(-1, s.n_heads, s.rows, s.cols)
         return torch.einsum("bhpq,chpq->bc", z, self.flat_weight()) + self.bias
+
+
+class MLPProbe(StructuredProbe):
+    """Spec 4.5 capacity control: n_features -> hidden -> n_classes, ReLU.
+
+    One class for all three family-5 members, because the reduction happens outside the module and
+    only the input width differs: `mlp_state` (the full state vector: 524,288 on BDH, 1,400 on the
+    LSTM, 3,520 on RWKV, and the matched arm H6 uses), `mlp_rownorm` (sigma_rownorm, 8,192 dims,
+    BDH only) and `mlp_randproj` (the sparse projection of flat sigma, 4,096 dims, BDH only).
+    """
+
+    def __init__(self, n_features: int, n_classes: int, hidden: int = MLP_HIDDEN, mean=None, std=None,
+                 gen=None):
+        super().__init__(n_features, n_classes, mean, std)
+        self.net = nn.Sequential(nn.Linear(n_features, hidden), nn.ReLU(),
+                                 nn.Linear(hidden, n_classes, bias=False))
+        for m in (self.net[0], self.net[2]):
+            nn.init.normal_(m.weight, std=m.in_features**-0.5, generator=gen)
+        nn.init.zeros_(self.net[0].bias)
+
+    def forward(self, x, t=None):
+        return self.net(self.standardize(x)) + self.bias
+
+
+def sparse_randproj(n_in: int, n_out: int, density: int = RANDPROJ_DENSITY, seed: int = 0):
+    """Very sparse random projection: `density` signed nonzeros per output dimension (spec 4.5)."""
+    rng = np.random.default_rng(seed)
+    idx = np.stack([rng.choice(n_in, size=density, replace=False) for _ in range(n_out)]).astype(np.int64)
+    sign = rng.choice([-1.0, 1.0], size=(n_out, density)).astype(np.float32)
+    return idx, sign
+
+
+def apply_randproj(x, idx, sign) -> np.ndarray:
+    """x: [B, n_in] -> [B, n_out] float32. Gathers `density` columns per output dimension."""
+    x = np.asarray(x, dtype=np.float32)
+    return np.einsum("bod,od->bo", x[:, idx], sign, optimize=True).astype(np.float32)

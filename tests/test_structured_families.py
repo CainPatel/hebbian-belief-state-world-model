@@ -1,10 +1,15 @@
+import numpy as np
 import torch
 
 from hbwm.probes.structured import (
+    MLP_HIDDEN,
     FlatLinearProbe,
+    MLPProbe,
     QueryRankProbe,
     StateShape,
+    apply_randproj,
     param_count,
+    sparse_randproj,
 )
 
 SHAPE = StateShape(n_heads=2, rows=8, cols=4, rotary=False)  # saturation_rank = 4
@@ -64,3 +69,38 @@ def test_standardization_buffers_are_applied():
                         std=torch.full((SHAPE.n_features,), 4.0))
     x = torch.full((1, SHAPE.n_features), 2.0)
     assert torch.allclose(p(x), p.bias.detach().unsqueeze(0), atol=1e-6)
+
+
+def test_mlp_probe_shapes_and_hidden_width():
+    p = MLPProbe(64, C)
+    assert p(torch.randn(7, 64)).shape == (7, C)
+    assert p.net[0].out_features == MLP_HIDDEN
+
+
+def test_mlp_probe_is_nonlinear():
+    # A zero-bias ReLU net is positively homogeneous, so scaling by +2 would NOT separate it from a
+    # linear map. Negative scaling does: relu(-z) != -relu(z).
+    torch.manual_seed(0)
+    p = MLPProbe(8, C, hidden=16)
+    x = torch.randn(4, 8)
+    assert not torch.allclose(p(-x) - p.bias, -(p(x) - p.bias), atol=1e-4)
+
+
+def test_sparse_randproj_is_deterministic_and_correctly_shaped():
+    idx, sign = sparse_randproj(1000, 32, density=8, seed=7)
+    idx2, sign2 = sparse_randproj(1000, 32, density=8, seed=7)
+    assert idx.shape == (32, 8) and sign.shape == (32, 8)
+    assert np.array_equal(idx, idx2) and np.array_equal(sign, sign2)
+    assert idx.min() >= 0 and idx.max() < 1000
+    assert set(np.unique(sign)) <= {-1.0, 1.0}
+    assert all(len(np.unique(row)) == 8 for row in idx)  # sampled without replacement
+
+
+def test_apply_randproj_matches_the_explicit_dense_equivalent():
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal((5, 40)).astype(np.float32)
+    idx, sign = sparse_randproj(40, 6, density=4, seed=1)
+    dense = np.zeros((40, 6), dtype=np.float32)
+    for j in range(6):
+        dense[idx[j], j] = sign[j]
+    assert np.allclose(apply_randproj(x, idx, sign), x @ dense, atol=1e-5)
