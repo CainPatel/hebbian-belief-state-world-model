@@ -90,6 +90,7 @@ preregistered decision**, and none of them rescues H1. Scripts are in
 - **[SPEC.md](SPEC.md)** and the **[Study 1 design](docs/superpowers/specs/2026-08-22-hbwm-study1-design.md)**: the research proposal, and the buildable spec that governs Study 1.
 - **[Study 2 design](docs/superpowers/specs/2026-08-27-hbwm-study2-associative-readout-design.md)** and **[plan](docs/superpowers/plans/2026-08-27-hbwm-study2.md)**: associative readout of $\sigma$, designed and preregistered, not run.
 - **[analysis/posthoc/](analysis/posthoc/)**: the three exploratory scripts behind the post-hoc findings.
+- **[docs/hf/](docs/hf/)**: model and dataset cards for optional Hugging Face artifact hosting.
 
 ## Reproduction
 
