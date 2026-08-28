@@ -393,13 +393,17 @@ def aggregate_study2(root, exp="study1", src_exp="study1", data_dir=None) -> dic
                      family=best_matched, saturated={m: a["saturated"] for m, a in arms.items()})
     h6["eligible_families"] = sorted(matched)
     h6["degeneracy_exclusions"] = excluded
-    # Spec 4.5 and 7: H7 is the reductions, not the matched `mlp_state` arm.
-    mlp_keys = [k for k in ("mlp_rownorm", "mlp_randproj") if k in bdh]
-    best_mlp = max(mlp_keys, key=lambda k: bdh[k]["val_mean"]) if mlp_keys else None
-    h7 = (h7_attribution(bdh[best_mlp]["per_seed"], structured[best_structured]["per_seed"])
-          if best_mlp else {})
+    # Spec 7 (section 7 line 250) and the spec 5.1 diagram both name `mlp_rownorm`, not the
+    # val-acc-selected max of the two reductions, as H7's comparator. `mlp_randproj` is still
+    # computed and reported alongside it as BDH-only context (spec 4.5), but it decides nothing.
+    h7 = (h7_attribution(bdh["mlp_rownorm"]["per_seed"], structured[best_structured]["per_seed"])
+          if "mlp_rownorm" in bdh else {})
     if h7:
-        h7["mlp_family"], h7["structured_family"] = best_mlp, best_structured
+        h7["mlp_family"], h7["structured_family"] = "mlp_rownorm", best_structured
+        if "mlp_randproj" in bdh:
+            ctx = h7_attribution(bdh["mlp_randproj"]["per_seed"], structured[best_structured]["per_seed"])
+            ctx["mlp_family"], ctx["structured_family"] = "mlp_randproj", best_structured
+            h7["context_mlp_randproj"] = ctx
     bridge = {m: _bridge_rows(root, exp, m) for m in ("lstm", "rwkv")}
     return {"table": table, "h5": h5, "h6": h6, "h7": h7, "h8": _h8_all(root, exp),
             "bridge": bridge, "structure": _structure_all(root, exp)}
@@ -543,9 +547,15 @@ def write_outputs_study2(agg: dict, out_dir) -> None:
               f"Excluded as degenerate: {_exclusions_text(h6['degeneracy_exclusions'])}.", ""]
     if h7:
         lines += ["## H7 (attribution, gates nothing)", "",
-                  f"`{h7['mlp_family']}` at {h7['mlp_mean']:.3f} against `{h7['structured_family']}` "
-                  f"at {h7['structured_mean']:.3f}; attribute to capacity: "
-                  f"**{h7['attribute_to_capacity']}**.", ""]
+                  f"Verdict: `{h7['mlp_family']}` at {h7['mlp_mean']:.3f} against "
+                  f"`{h7['structured_family']}` at {h7['structured_mean']:.3f}; attribute to "
+                  f"capacity: **{h7['attribute_to_capacity']}**.", ""]
+        ctx = h7.get("context_mlp_randproj")
+        if ctx:
+            lines += [f"Context (BDH-only, decides nothing): `{ctx['mlp_family']}` at "
+                      f"{ctx['mlp_mean']:.3f} against `{ctx['structured_family']}` at "
+                      f"{ctx['structured_mean']:.3f}; attribute to capacity: "
+                      f"**{ctx['attribute_to_capacity']}**.", ""]
     if agg["h8"]:
         lines += ["## H8 (belief revision, clock rebaselined to the first not-visible step)", "",
                   "| model | mean frac(latency <= 5) | mean excluded frac | low coverage | supported |",

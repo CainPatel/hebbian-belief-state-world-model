@@ -82,6 +82,33 @@ def test_aggregate_study2_picks_the_best_matched_family_and_decides_h5_h6(tmp_pa
     assert agg["h7"]["mlp_family"] == "mlp_rownorm"  # H7 is the reduction, not the matched arm
 
 
+def test_h7_verdict_uses_mlp_rownorm_not_the_higher_val_acc_reduction(tmp_path):
+    """Spec 7 line 250 and the spec 5.1 diagram both name `mlp_rownorm` as H7's comparator.
+    `mlp_randproj` is given a HIGHER val_acc here specifically so that picking whichever reduction
+    scores best on probe_val -- a selection effect the spec does not authorize -- would choose
+    `mlp_randproj` instead. `mlp_randproj` must still be computed and reported, but as BDH-only
+    context that decides nothing, not as the verdict."""
+    bdh_families = dict(FAMILIES_BDH)
+    bdh_families["mlp_randproj_L3"] = (0.30, 0.35, None, False, 0.55)  # beats mlp_rownorm's 0.20
+    for stem, fams, shape in (("bdh_g100", bdh_families, {"n_heads": 4, "rows": 2048, "cols": 64}),
+                              ("lstm", FAMILIES_BASE, {"n_heads": 1, "rows": 4, "cols": 350}),
+                              ("rwkv", FAMILIES_BASE, {"n_heads": 1, "rows": 20, "cols": 176})):
+        for seed in (0, 1, 2):
+            _write(tmp_path / "study2" / f"{stem}_lr0.003" / f"seed{seed}", fams, shape)
+    agg = aggregate_study2(tmp_path, exp="study2")
+    h7 = agg["h7"]
+    assert h7["mlp_family"] == "mlp_rownorm"  # the preregistered comparator, not the val-acc max
+    assert h7["mlp_mean"] == pytest.approx(0.19)  # mlp_rownorm's own test acc
+    ctx = h7["context_mlp_randproj"]
+    assert ctx["mlp_family"] == "mlp_randproj"
+    assert ctx["mlp_mean"] == pytest.approx(0.30)  # still computed and reported, as context
+    assert ctx["gates_nothing"] is True
+    write_outputs_study2(agg, tmp_path / "study2" / "results2")
+    md = (tmp_path / "study2" / "results2" / "results.md").read_text()
+    assert "Verdict: `mlp_rownorm`" in md
+    assert "Context (BDH-only, decides nothing): `mlp_randproj`" in md
+
+
 def test_a_degenerate_arm_is_reported_but_excluded_from_h6(tmp_path):
     """Spec 7: mlp_state here memorizes (train 0.99, val 0.015 < 2 * 0.011) at every l2."""
     for stem, fams, shape in (("bdh_g100", FAMILIES_BDH, {"n_heads": 4, "rows": 2048, "cols": 64}),
