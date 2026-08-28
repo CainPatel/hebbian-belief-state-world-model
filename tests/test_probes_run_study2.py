@@ -18,6 +18,10 @@ SMOKE = Study2Config(families=["flat_linear", "query_rank_1", "mlp_rownorm"], le
                      n_boot=20, randproj_dim=8, randproj_density=4, bridge=False, structure=False)
 
 
+def _never_called(*a, **kw):
+    raise AssertionError("a recorder pass was started before the run's arguments were validated")
+
+
 def _write_ckpt(tmp_path, model, kind, cfg_dict):
     run_dir = tmp_path / "seed0"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -96,8 +100,20 @@ def test_randproj_control_projects_the_standardized_flat_sigma():
     assert not np.allclose(got, apply_randproj(X, *proj))  # emphatically not the raw-row projection
 
 
-def test_randproj_arm_uses_the_train_split_statistics_on_every_split(tiny_data, tmp_path):
-    """The fitted probe and both streamed passes must see one input distribution (spec 4.5)."""
+def test_randproj_arm_uses_the_train_split_statistics_on_every_split(tiny_data, tmp_path, monkeypatch):
+    """The fitted probe and both streamed passes must see ONE input distribution (spec 4.5).
+
+    The statistics are fitted once, on the train split, and reused on val, test and the H8 pass. A
+    refit inside `_stream_eval` would standardize each streamed batch by its own moments -- the exact
+    failure this counts: one call per level here, many more if the statistics are ever refit.
+    """
+    calls = []
+
+    def counting_feature_stats(X, *a, **kw):
+        calls.append(X.shape)
+        return feature_stats(X, *a, **kw)
+
+    monkeypatch.setattr("hbwm.probes.run.feature_stats", counting_feature_stats)
     torch.manual_seed(0)
     run_dir = _write_ckpt(tmp_path, HBWMCore(TINY_BDH), "bdh", vars(TINY_BDH))
     cfg = Study2Config(**{**vars(SMOKE), "families": ["mlp_randproj"]})
@@ -106,3 +122,40 @@ def test_randproj_arm_uses_the_train_split_statistics_on_every_split(tiny_data, 
     r = json.loads((run_dir / "probes2" / "mlp_randproj_L1.json").read_text())
     assert r["n_input"] == cfg.randproj_dim == 8
     assert 0.0 <= r["test_acc"] <= 1.0
+    # Exactly one fit, over the whole train cache, for the run's single level.
+    assert len(calls) == 1, f"flat statistics fitted {len(calls)} times, not once: {calls}"
+    assert calls[0] == (r["n_train"], r["n_features"])
+
+
+def test_no_family_pass_is_started_for_an_unknown_family(tiny_data, tmp_path, monkeypatch):
+    """A typo'd --families must not cost a ~25 GB recorder pass before it fails (spec 6)."""
+    monkeypatch.setattr("hbwm.probes.run.collect_many", _never_called)
+    torch.manual_seed(0)
+    run_dir = _write_ckpt(tmp_path, HBWMCore(TINY_BDH), "bdh", vars(TINY_BDH))
+    cfg = Study2Config(**{**vars(SMOKE), "families": ["flat_lienar", "mlp_rownorm"]})
+    with pytest.raises(ValueError, match=r"unknown families \['flat_lienar'\]"):
+        run_probes_study2(run_dir, tiny_data.out_dir, cfg, device="cpu")
+    assert not (run_dir / "probes2" / "cache").exists()
+    assert not (run_dir / "probes2" / "done.json").exists()
+
+
+@pytest.mark.parametrize("levels", [[2], [-1], [0, 5]])
+def test_no_pass_is_started_for_an_out_of_range_level(tiny_data, tmp_path, monkeypatch, levels):
+    """-1 is the dangerous one: it indexes the LAST level while labelling every artifact `_L-1`."""
+    monkeypatch.setattr("hbwm.probes.run.collect_many", _never_called)
+    torch.manual_seed(0)
+    run_dir = _write_ckpt(tmp_path, HBWMCore(TINY_BDH), "bdh", vars(TINY_BDH))
+    cfg = Study2Config(**{**vars(SMOKE), "levels": levels})
+    with pytest.raises(ValueError, match=r"outside range\(2\)"):
+        run_probes_study2(run_dir, tiny_data.out_dir, cfg, device="cpu")
+    assert not (run_dir / "probes2" / "cache").exists()
+    assert not (run_dir / "probes2" / "done.json").exists()
+
+
+def test_repeated_levels_are_deduplicated_and_sorted(tiny_data, tmp_path):
+    """`--levels 1,1,0` must run each level once, not overwrite level 1 with itself."""
+    torch.manual_seed(0)
+    run_dir = _write_ckpt(tmp_path, HBWMCore(TINY_BDH), "bdh", vars(TINY_BDH))
+    cfg = Study2Config(**{**vars(SMOKE), "families": ["flat_linear"], "levels": [1, 1, 0]})
+    out = run_probes_study2(run_dir, tiny_data.out_dir, cfg, device="cpu")
+    assert out["specs"] == ["flat_linear_L0", "flat_linear_L1"]

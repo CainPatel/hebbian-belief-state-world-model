@@ -332,6 +332,32 @@ def _derived_inputs(X_flat, X_rownorm, kind, proj, flat_stats=None):
     return out
 
 
+def _study2_selection(cfg: Study2Config, model, shape, is_bdh):
+    """Validate `--families`/`--levels` and return (specs, levels), matching Study 1's `full_levels`.
+
+    Every check here happens BEFORE the first recorder pass. A typo'd family would otherwise leave
+    `specs` empty, write a ~25 GB `sigma_full_L{n}.npy` cache, train nothing and die hours later on
+    `max()` of an empty sequence; a negative level would index `payload["sigma"][-1]`, silently
+    scoring the LAST level while every artifact is labelled `_L-1`.
+    """
+    known = {spec_label(s) for s in family_specs(shape)}
+    unknown = sorted(set(cfg.families) - known)
+    if unknown:
+        raise ValueError(f"unknown families {unknown}; this model's families are {sorted(known)}")
+    if not is_bdh:  # a baseline has a single state and `_study2_level` ignores the level entirely
+        if any(x is not None for x in cfg.levels):
+            raise ValueError(f"levels {list(cfg.levels)} on a baseline: only BDH has levels")
+        levels = [None]
+    elif not cfg.levels:
+        levels = list(range(n_levels(model)))
+    else:  # de-duplicate and sort like Study 1's explicit full_levels, and range-check first
+        bad = sorted(x for x in cfg.levels if x is None or not (0 <= int(x) < n_levels(model)))
+        if bad:
+            raise ValueError(f"levels {bad} outside range({n_levels(model)})")
+        levels = sorted({int(x) for x in cfg.levels})
+    return [s for s in family_specs(shape) if not cfg.families or spec_label(s) in cfg.families], levels
+
+
 def run_probes_study2(run_dir, data_dir, cfg: Study2Config, device=None) -> dict:
     """One checkpoint, one level at a time (spec section 6 memory strategy)."""
     run_dir = Path(run_dir)
@@ -346,6 +372,7 @@ def run_probes_study2(run_dir, data_dir, cfg: Study2Config, device=None) -> dict
         model, _, _ = load_checkpoint(run_dir / "ckpt.pt", device)
         is_bdh = isinstance(model, HBWMCore)
         shape = state_shape(model)
+        specs, levels = _study2_selection(cfg, model, shape, is_bdh)  # fail fast: no recorder pass yet
         freqs = model.attn.freqs.reshape(-1).cpu() if is_bdh else None
         d_tr, d_va, d_te = (EpisodeData(data_dir, s) for s in ("probe_train", "probe_val", "probe_test"))
         rng = np.random.default_rng(cfg.seed)
@@ -355,9 +382,6 @@ def run_probes_study2(run_dir, data_dir, cfg: Study2Config, device=None) -> dict
         chance = majority_chance(p_tr.label, p_te.label)
         ceiling = float((p_te.oracle == p_te.label).mean())
         obs_pos = tk.obs_positions(d_tr.L)
-        specs = [s for s in family_specs(shape)
-                 if not cfg.families or spec_label(s) in cfg.families]
-        levels = cfg.levels or (list(range(n_levels(model))) if is_bdh else [None])
         results, summary_errors = {}, []  # summary_errors collects exploratory failures (Task 12)
         for level in levels:
             results.update(_study2_level(model, shape, freqs, (d_tr, d_va, d_te), (p_tr, p_va, p_te),
