@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from hbwm.matrix import GAMMA_ARMS, best_lr, run_path
+from hbwm.matrix import GAMMA_ARMS, STUDY2_LR, best_lr, run_path
 from hbwm.probes.decisions import (
     h1_decision,
     h2_curve,
@@ -242,7 +242,6 @@ def write_outputs(agg: dict, out_dir) -> None:
 
 
 STUDY2_MODELS = ["bdh_g100", "lstm", "rwkv"]
-STUDY2_LR = 0.003  # RESULTS.md: best_lr.json selected 3e-3 for all three families
 STRUCTURED_FAMILIES = ("query_rank_r", "shared_query_rank_r", "derot_query_rank_r",
                        "derot_flat_linear")
 MATCHED_FAMILIES = ("flat_linear", "query_rank_r", "shared_query_rank_r", "derot_flat_linear",

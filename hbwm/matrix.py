@@ -56,11 +56,12 @@ def headline_runs(root, exp):
 
 
 STUDY2_LEVELS = {0: [3, 4], 1: [3], 2: [4]}  # spec section 6: each seed's Study 1 best levels
+STUDY2_LR = 0.003  # RESULTS.md: best_lr.json selected 3e-3 for all three families; the single
+# source of truth for the LR-tagged run directory both this module and hbwm.probes.evaluate read
 
 
-def study2_jobs(root, exp="study1"):
-    lr = 0.003  # RESULTS.md: best_lr.json selected 3e-3 for all three families
-    return [(stem, lr, seed) for stem in MODELS for seed in SEEDS]
+def study2_jobs():
+    return [(stem, STUDY2_LR, seed) for stem in MODELS for seed in SEEDS]
 
 
 def train_cmd(job, root, data=None):
@@ -118,7 +119,7 @@ def main():
             sys.exit(1)  # the shell chain must still stop before evaluate
     elif args.phase == "study2":
         failed = []
-        for stem, lr, seed in study2_jobs(root):
+        for stem, lr, seed in study2_jobs():
             rd = run_path(root, args.exp, stem, lr, seed)
             if (rd / "probes2" / "done.json").exists():
                 print(f"skip (probed): {rd}")
