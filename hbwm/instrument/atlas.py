@@ -12,7 +12,8 @@ from hbwm.instrument.recorder import SigmaRecorder
 
 
 @torch.no_grad()
-def build_atlas(model: HBWMCore, data: EpisodeData, n_episodes=500, top_m=32, batch_eps=50, device=None):
+def build_atlas(model: HBWMCore, data: EpisodeData, n_episodes=500, top_m=32, batch_eps=50, device=None,
+                return_means=False):
     """Per level: top-m neurons (per head) by mean x_sparse when (a) a given token is read, (b) the agent
     stands on a given cell at observation end."""
     device = device if device is not None else next(model.parameters()).device
@@ -48,13 +49,15 @@ def build_atlas(model: HBWMCore, data: EpisodeData, n_episodes=500, top_m=32, ba
         release_memory(device)
     tok_mean = tok_sum / tok_cnt.clamp(min=1)[None, :, None, None]
     cell_mean = cell_sum / cell_cnt.clamp(min=1)[None, :, None, None]
-    return {
+    atlas = {
         "top_m": top_m, "G": G, "n_levels": L, "n_head": nh,
         "token": tok_mean.topk(top_m, dim=-1).indices.tolist(),
         "cell": cell_mean.topk(top_m, dim=-1).indices.tolist(),
         "token_counts": tok_cnt.long().tolist(),
         "cell_counts": cell_cnt.long().tolist(),
     }
+    # spec 4.8 measurement 5 needs the full [L, V, nh, N] profile, which atlas.json does not carry.
+    return (atlas, tok_mean) if return_means else atlas
 
 
 def save_atlas(atlas: dict, path) -> None:

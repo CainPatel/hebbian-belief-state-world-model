@@ -77,3 +77,33 @@ def write_concentration(w) -> dict:
     out["participation_ratio"] = _summary(participation_ratio(w))
     out["n_rows"] = n
     return out
+
+
+def activation_sparsity(x_sparse) -> dict:
+    """Spec 4.8 measurement 3: ReLU zero fraction of the write key. Contrast only."""
+    x = torch.as_tensor(x_sparse, dtype=torch.float32)
+    return {"zero_fraction": _summary((x == 0).to(torch.float64).mean(dim=-1)),
+            "n_neurons": int(x.shape[-1])}
+
+
+def atlas_selectivity(tok_mean, token_counts) -> dict:
+    """Spec 4.8 measurement 5: peakedness of each neuron's token-conditional mean activation.
+
+    tok_mean: [V, nh, N] for ONE level. Tokens with zero `token_counts` are dropped (PAD is unused, so
+    33 of the 34 vocabulary entries survive). `x_sparse` is a ReLU output, so the profile is
+    nonnegative and normalizes to a distribution.
+    """
+    m = torch.as_tensor(tok_mean, dtype=torch.float64)
+    keep = torch.as_tensor(np.asarray(token_counts) > 0)
+    m = m[keep]  # [V', nh, N]
+    v = int(m.shape[0])
+    tot = m.sum(dim=0)  # [nh, N]
+    live = tot > 0
+    p = torch.where(live.unsqueeze(0), m / tot.clamp(min=1e-30), torch.zeros_like(m))
+    max_share = p.amax(dim=0)[live]
+    ent = -(p * torch.log(p.clamp(min=1e-30))).sum(dim=0)[live] / np.log(v)
+    frac_peaked = float((max_share > 0.5).to(torch.float64).mean()) if max_share.numel() else float("nan")
+    return {"max_share": _summary(max_share) if max_share.numel() else dict(NAN_SUMMARY),
+            "normalized_entropy": _summary(ent) if ent.numel() else dict(NAN_SUMMARY),
+            "frac_max_share_above_half": frac_peaked,
+            "n_tokens": v, "n_neurons_live": int(live.sum())}

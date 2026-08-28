@@ -1,7 +1,11 @@
 import numpy as np
 import torch
 
+from hbwm.bdh.core import HBWMConfig, HBWMCore
+from hbwm.instrument.atlas import build_atlas
 from hbwm.instrument.structure import (
+    activation_sparsity,
+    atlas_selectivity,
     effective_rank,
     participation_ratio,
     row_norm_stats,
@@ -69,3 +73,48 @@ def test_all_summaries_carry_median_and_deciles():
                 continue
             assert set(v) >= {"median", "p10", "p90", "min", "max"}
             assert v["p10"] <= v["median"] <= v["p90"] or np.isclose(v["p10"], v["p90"])
+
+
+def test_activation_sparsity_counts_relu_zeros():
+    x = torch.zeros(2, 1, 10)
+    x[:, :, :3] = 1.0
+    r = activation_sparsity(x)
+    assert abs(r["zero_fraction"]["median"] - 0.7) < 1e-6
+
+
+def test_atlas_selectivity_endpoints():
+    V, nh, N = 33, 1, 2
+    counts = np.ones(V, dtype=np.int64)
+    tok_mean = torch.zeros(V, nh, N)
+    tok_mean[4, 0, 0] = 1.0        # neuron 0 fires for exactly one token
+    tok_mean[:, 0, 1] = 1.0        # neuron 1 fires equally for every token
+    r = atlas_selectivity(tok_mean, counts)
+    assert abs(r["max_share"]["max"] - 1.0) < 1e-6           # the single-token neuron
+    assert abs(r["normalized_entropy"]["min"] - 0.0) < 1e-6
+    assert abs(r["max_share"]["min"] - 1 / 33) < 1e-6        # the flat neuron
+    assert abs(r["normalized_entropy"]["max"] - 1.0) < 1e-6
+    assert abs(r["frac_max_share_above_half"] - 0.5) < 1e-6
+
+
+def test_atlas_selectivity_ignores_tokens_with_zero_count():
+    V, counts = 33, np.ones(33, dtype=np.int64)
+    counts[1] = 0  # PAD is never seen
+    tok_mean = torch.zeros(V, 1, 1)
+    tok_mean[1, 0, 0] = 99.0  # all the mass sits on the unseen token
+    r = atlas_selectivity(tok_mean, counts)
+    assert r["n_tokens"] == 32
+    assert np.isnan(r["max_share"]["median"]) or r["max_share"]["median"] == 0.0
+
+
+def test_build_atlas_can_return_the_token_conditional_means(tiny_data):
+    from hbwm.envs.dataset import EpisodeData
+
+    torch.manual_seed(0)
+    m = HBWMCore(HBWMConfig(n_layer=2, n_embd=16, n_head=2, mlp_internal_dim_multiplier=8,
+                            vocab_size=34, dropout=0.0, block_size=128)).eval()
+    d = EpisodeData(tiny_data.out_dir, "probe_train")
+    atlas, tok_mean = build_atlas(m, d, n_episodes=4, top_m=3, batch_eps=4, return_means=True)
+    assert tuple(tok_mean.shape) == (2, 34, 2, 64)
+    assert atlas["top_m"] == 3
+    plain = build_atlas(m, d, n_episodes=4, top_m=3, batch_eps=4)
+    assert plain["token"] == atlas["token"]  # the returned atlas is unchanged
