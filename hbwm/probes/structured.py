@@ -15,7 +15,7 @@ from torch import nn
 
 from hbwm.bdh.core import HBWMCore
 from hbwm.bdh.upstream.bdh import Attention
-from hbwm.probes.probe import STATS_MAX_ELEMS, feature_stats  # noqa: F401
+from hbwm.probes.probe import STATS_MAX_ELEMS, feature_stats
 
 STUDY2_RANKS = (1, 4, 16)  # spec 4.2, selected on probe_val
 STUDY2_RESTARTS = 3  # spec 4.7 item 2, factorized families only
@@ -52,6 +52,9 @@ class StateShape:
     def rank_fraction(self, r: int) -> float:
         """Effective rank fraction r / min(P, Q), clipped at 1.0 (spec 5.2 reporting requirement)."""
         return min(1.0, r / self.saturation_rank)
+
+    def _replace_rotary(self, rotary: bool) -> "StateShape":
+        return dataclasses.replace(self, rotary=rotary)
 
 
 def state_shape(model, feature: str = "sigma_full") -> StateShape:
@@ -312,3 +315,111 @@ def build_family(spec: FamilySpec, shape: StateShape, n_classes: int, n_input: i
         return QueryRankProbe(shape, n_classes, spec.rank, mean, std,
                               shared_query=(name == "shared_query_rank_r"), gen=gen)
     raise ValueError(f"unknown family {name!r}")
+
+
+def _rows_to_tensor(X, idx):
+    idx = np.sort(idx)
+    return torch.from_numpy(np.asarray(X[idx], dtype=np.float32)), idx
+
+
+def derot_feature_stats(X, positions, shape: StateShape, freqs, chunk: int = 256):
+    """Per-feature mean and population std IN THE DEROTATED FRAME (spec 4.4).
+
+    The derotated families do not share the undecorated families' statistics, because standardization
+    and the rotation do not commute. This mirrors `feature_stats` exactly (float64 accumulation, two
+    passes, std < 1e-6 mapped to 1.0, the same STATS_MAX_ELEMS row-chunk cap for very wide features)
+    and derotates each chunk at its own absolute token positions first. X may be the fp16 memmap: two
+    sequential passes over 25 GB is minutes of I/O.
+    """
+    n, F_ = X.shape
+    if n == 0:
+        return np.zeros(F_, dtype=np.float32), np.ones(F_, dtype=np.float32)
+    rows = max(1, min(int(chunk), STATS_MAX_ELEMS // max(int(F_), 1)))
+    pos = np.asarray(positions, dtype=np.float32)
+    f = torch.as_tensor(freqs, dtype=torch.float32)
+
+    def block(b0):
+        xb = torch.from_numpy(np.asarray(X[b0 : b0 + rows], dtype=np.float32))
+        z = xb.view(-1, shape.n_heads, shape.rows, shape.cols)
+        t = torch.from_numpy(pos[b0 : b0 + rows])
+        return derotate(z, t, f).reshape(xb.shape[0], -1).numpy().astype(np.float64)
+
+    total = np.zeros(F_, dtype=np.float64)
+    for b0 in range(0, n, rows):
+        total += block(b0).sum(axis=0)
+    mean = total / n
+    sq = np.zeros(F_, dtype=np.float64)
+    for b0 in range(0, n, rows):
+        d = block(b0) - mean
+        sq += np.einsum("ij,ij->j", d, d)
+    std = np.sqrt(np.maximum(sq / n, 0.0))
+    std[std < 1e-6] = 1.0
+    return mean.astype(np.float32), std.astype(np.float32)
+
+
+def train_family_probes(X, y, n_classes, shape: StateShape, spec: FamilySpec, l2_grid,
+                        positions=None, epochs: int = 20, lr: float = 1e-3, batch: int = 512,
+                        seed: int = 0, device="cpu", freqs=None, n_input=None):
+    """Train one probe per (l2, restart) jointly on shared minibatches (spec 4.7).
+
+    X may be an in-RAM array or an on-disk fp16 memmap; every module in the grid sees the same
+    minibatches, so the memmap is read once per epoch rather than once per probe. `positions` is the
+    per-row absolute TOKEN position, required only by the derot families.
+    """
+    n, n_feat = X.shape
+    n_input = n_feat if n_input is None else n_input
+    torch.manual_seed(seed)
+    rng = np.random.default_rng(seed)
+    # Spec 4.4: a derotated family's statistics are fitted in the DEROTATED frame, so it gets its own
+    # mean/std from an extra streaming pass. Every other family uses Study 1's `feature_stats` verbatim.
+    if spec.name.startswith("derot_") and shape.rotary:
+        if positions is None:
+            raise ValueError(f"{spec_label(spec)} needs per-row absolute token positions")
+        mean, std = (torch.from_numpy(a) for a in derot_feature_stats(X, positions, shape, freqs))
+    else:
+        mean, std = (torch.from_numpy(a) for a in feature_stats(X))
+    probes, opts = {}, {}
+    for l2 in l2_grid:
+        for r in range(spec.n_restarts):
+            gen = torch.Generator().manual_seed(seed * 1000 + r)
+            p = build_family(spec, shape, n_classes, n_input, mean, std, freqs, gen).to(device)
+            probes[(l2, r)] = p
+            opts[(l2, r)] = torch.optim.Adam(p.parameters(), lr=lr)
+    y_t = torch.from_numpy(np.asarray(y, dtype=np.int64))
+    pos_t = None if positions is None else torch.as_tensor(np.asarray(positions), dtype=torch.float32)
+    for _ in range(epochs):
+        perm = rng.permutation(n)
+        for b0 in range(0, n, batch):
+            xb, idx = _rows_to_tensor(X, perm[b0 : b0 + batch])
+            xb, yb = xb.to(device), y_t[idx].to(device)
+            tb = None if pos_t is None else pos_t[idx].to(device)
+            for key, p in probes.items():
+                l2 = key[0]
+                pen = sum(t.pow(2).sum() for t in p.readout_parameters())
+                loss = F.cross_entropy(p(xb, tb), yb) + l2 * pen
+                opts[key].zero_grad(set_to_none=True)
+                loss.backward()
+                opts[key].step()
+    return probes
+
+
+@torch.no_grad()
+def evaluate_on(probes, X, y, positions=None, batch: int = 512, device="cpu"):
+    """Accuracy of every probe in `probes` on (X, y), in ONE chunked pass over X.
+
+    This is how the training accuracy the degeneracy criterion needs (spec 7) is obtained. X may be
+    the 25 GB fp16 memmap, so the pass is shared across the whole (l2, restart) grid rather than
+    repeated per probe.
+    """
+    y = np.asarray(y)
+    if len(y) == 0:
+        return {k: float("nan") for k in probes}
+    hits = {k: 0 for k in probes}
+    pos = None if positions is None else np.asarray(positions, dtype=np.float32)
+    for b0 in range(0, len(y), batch):
+        xb = torch.from_numpy(np.asarray(X[b0 : b0 + batch], dtype=np.float32)).to(device)
+        yb = torch.from_numpy(y[b0 : b0 + batch].astype(np.int64)).to(device)
+        tb = None if pos is None else torch.from_numpy(pos[b0 : b0 + batch]).to(device)
+        for k, p in probes.items():
+            hits[k] += int((p.to(device).eval()(xb, tb).argmax(-1) == yb).sum())
+    return {k: v / len(y) for k, v in hits.items()}

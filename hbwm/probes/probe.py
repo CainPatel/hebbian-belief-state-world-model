@@ -97,18 +97,25 @@ def predict_proba(probe, X, batch=4096, device="cpu"):
 
 
 @torch.no_grad()
-def predict_proba_stream(probes, it, n, n_classes, device="cpu", columns=None):
+def predict_proba_stream(probes, it, n, n_classes, device="cpu", columns=None, positions=None):
     """probes: {spec: {key: LinearProbe}}. columns: optional {spec: {key: feature-index array}} to slice rows
-    (applied to the raw streamed features *before* the probe, which standardizes its own subset)."""
+    (applied to the raw streamed features *before* the probe, which standardizes its own subset).
+    positions: optional [n] array of absolute token positions; when given it is handed to each probe's
+    `set_positions` before the batch, which is how Study 2's derot families see their t. Default None
+    reproduces the Study 1 path exactly."""
     out = {s: {k: np.zeros((n, n_classes), dtype=np.float32) for k in d} for s, d in probes.items()}
+    pos = None if positions is None else np.asarray(positions, dtype=np.float32)
     for idx, feats in it:
         for s, d in probes.items():
             xb_full = torch.from_numpy(feats[s]).to(device)
             for k, p in d.items():
+                p = p.to(device).eval()
+                if pos is not None and hasattr(p, "set_positions"):
+                    p.set_positions(torch.from_numpy(pos[idx]).to(device))
                 xb = xb_full
                 if columns is not None and s in columns and k in columns[s]:
                     xb = xb_full[:, torch.as_tensor(columns[s][k], device=device)]
-                out[s][k][idx] = torch.softmax(p.to(device).eval()(xb), dim=-1).cpu().numpy()
+                out[s][k][idx] = torch.softmax(p(xb), dim=-1).cpu().numpy()
     return out
 
 
