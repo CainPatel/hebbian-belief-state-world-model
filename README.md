@@ -7,6 +7,20 @@ gridworld, reads their states with standardized linear probes, and decides four 
 H4) under rules frozen before any run. **The answer is no: H1 failed, its preregistered kill
 criterion fired, and this is published as a preregistered negative result.**
 
+## Hypotheses tested
+
+All four hypotheses, their comparators and their numeric thresholds were fixed at commit
+`e674b1d` **before any experimental run**; the full text is in
+[docs/PREREGISTRATION.md](docs/PREREGISTRATION.md). Every comparison uses 3 seeds, and each model
+reports its own best level chosen on `probe_val` and scored on `probe_test`.
+
+| | what it asks | preregistered bar | verdict |
+|---|---|---|---|
+| **H1** | Is an out-of-view object's location more linearly readable from $\sigma$ than from BDH's activations alone, or from a parameter-matched LSTM or RWKV state? | mean acc($\sigma$) exceeds *every* comparator by more than 5 points, and all 3 paired-by-seed differences are positive. **Kill criterion:** failing against the LSTM state closes the line of inquiry. | **Not supported.** Kill criterion fired. |
+| **H2** | Does that readout decay gracefully as an object stays unseen for longer? | acc(33-64 steps) at least 0.5 times acc(1-4 steps), and no bucket below 50% of its predecessor | **Passes for $\gamma = 1.0$ only**, and weakly. Both baselines fail. |
+| **H3** | After an object silently moves and is later seen again, does the belief flip to the new cell? | latency of 5 steps or less in at least 70% of moved-and-re-observed episodes; episodes that never flip count as failures | **Not supported** for any BDH arm. Both baselines pass. |
+| **H4** | Is the belief carried by a sparse subset of $\sigma$'s features? | median k90, the smallest top-k reaching 90% of full accuracy, at most 256 (strong) or at most 1% of features (weak) | **Not supported** for BDH. Both baselines are strong-sparse. |
+
 ## Result
 
 Top-1 accuracy of a standardized linear probe predicting the true cell (81 classes) of an object the
@@ -29,14 +43,44 @@ Majority-class chance is **0.011**; the oracle-memory ceiling is **1.000** by co
   $\gamma = 0.99$, $\gamma = 0.97$, the LSTM and RWKV all fall below the 0.5 ratio bar.
 - **H3 not supported for any BDH arm.** Belief flips to the new cell within 5 steps of
   re-observation in 0.157 / 0.300 / 0.352 of episodes against a 0.70 bar; LSTM 0.940, RWKV 0.953.
-- **H4 not supported for BDH.** Median k90 is 524,288, the full feature count, so no proper sparse
-  subset reached 90% of full accuracy; both baselines are strong-sparse at median k90 = 256.
+- **H4 not supported for BDH.** Median k90 is 524,288, the full feature count: none of the six
+  tested budgets (16 to 16,384, at most 3.1% of the features) reached 90% of full accuracy, and
+  k90 = n_features is a terminal fallback rather than an exhaustive search. Both baselines are
+  strong-sparse at median k90 = 256.
 - **The model is not broken; the format is the finding.** BDH's test CE is 0.0246 against the
   LSTM's 0.0291 (RWKV 0.0242), so BDH out-predicts the baseline whose state out-probes it. The
   belief drives next-token behavior; what fails is reading it linearly out of $\sigma$.
-- **Post-hoc, exploratory:** all three architectures hold an *approximate* spatial belief; BDH's
-  degrades toward vagueness while both baselines' degrade into confident error
-  ([RESULTS.md](RESULTS.md#post-hoc-analyses-exploratory-not-preregistered)).
+
+## Post-hoc findings (exploratory, not preregistered)
+
+Three descriptive follow-ups, run on saved artifacts after the study closed. They **change no
+preregistered decision**, and none of them rescues H1. Scripts are in
+[analysis/posthoc/](analysis/posthoc/); full numbers and caveats in
+[RESULTS.md](RESULTS.md#post-hoc-analyses-exploratory-not-preregistered).
+
+1. **$\sigma$ is structurally sparse and lowish rank.** About 103 of 2,048 neuron rows carry the
+   effective mass (participation ratio 0.050), and 10.9 of 64 singular values carry 90% of the
+   squared Frobenius mass. This weakens, without eliminating, the "the flat probe simply had too
+   many parameters" reading: the effective feature count is nearer 26,000 than 524,288. One
+   checkpoint, one level, 64 episodes, so treat the magnitude as indicative.
+
+2. **Probe errors are spatially local.** Within-radius-1 accuracy, against a correctly per-row
+   computed chance rate of 0.097: BDH `sigma_full` 0.308, BDH `sigma_rownorm` 0.403, RWKV state
+   0.542. Every spec beats both a uniform and a row-shuffled null. The obvious confound is
+   controlled: mean distance from prediction to the agent (3.7 to 4.0 cells) tracks the true
+   object's distance from the agent (3.81), and predictions land on the agent's own cell only 0.1
+   to 1.0% of the time. So all three architectures hold an *approximate* spatial belief that an
+   81-way exact-match metric scores as near-total failure.
+
+3. **BDH fades where the baselines corrupt.** Within-radius-1 accuracy by steps since last seen:
+   BDH `sigma_rownorm` falls from 0.425 (1-4) to 0.257 (33-64), while RWKV falls from 0.686 to
+   0.155 over the same span, so **the ordering inverts at long horizons**. Past 65 steps both
+   baselines' expected error *exceeds the uniform null* in all three seeds, meaning confidently
+   wrong rather than merely uninformative, while BDH's never crosses its null at any bucket. A blur
+   calibration puts BDH at about 2.9 cells, widening to 5 or 6 at the longest gaps, and RWKV at
+   about 2.4 cells, widening to about 8 and then unmatchable to any blur scale. Caveats: the 65+
+   bucket holds only 662 rows shared across seeds, and for `sigma_full` alone the decay is within
+   seed noise.
 
 ## Documentation map
 
