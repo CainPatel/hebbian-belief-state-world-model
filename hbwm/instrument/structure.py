@@ -126,6 +126,14 @@ def measure_sigma_structure(model, data, pairs, level: int, n_sample: int = 1024
     write-mass accumulator is per-episode independent, every measurement is per example, and every
     reported number is an order-independent summary. Each chunk therefore starts from its OWN
     zero-initialized accumulator; `w` never spans chunks, whose episodes are unrelated.
+
+    Accumulator convention, deliberately NOT the spec's: the callback fires after `step()` has
+    already decayed and written sigma for `pos`, so at callback time for step t `w` holds
+    sum_{s <= t} gamma^(2(t - s)) q_s^2 ||x_s||^2, not the spec's sum_{s < t} gamma^(2(t - 1 - s))
+    (which is `w` at the START of step t). This one corresponds to the payload sigma the callback
+    actually reads, sum_{s <= t} gamma^(t - s) q_s (x) x_s: the exponents match, which is what makes
+    the ratio of measurement 1's row mass to measurement 4's write mass a cancellation index. Do not
+    "correct" the ordering to match the spec's indexing.
     """
     from hbwm.bdh.upstream.bdh import Attention
     from hbwm.envs import tokenizer as tk
@@ -168,13 +176,25 @@ def measure_sigma_structure(model, data, pairs, level: int, n_sample: int = 1024
         rec.run(tokens, None, fn)
         del tokens, w, fn  # the chunk's device state, before the next chunk allocates its own
         release_memory(device)
+    # Each `torch.cat` duplicates its list on the host (~2.1 GB for `sig` at n_sample = 1024), so
+    # every block is reduced to its summary and its inputs released before the next one allocates.
+    # `.clear()` rather than `del`: these names are closed over by `fn` above, and dropping the
+    # per-chunk slices is the point -- the list object itself costs nothing. Nothing below here is
+    # order-dependent, so the sequencing is hygiene only.
     sigma = torch.cat(sig)
+    sig.clear()
+    activation = activation_sparsity(torch.cat(xs))
+    xs.clear()
+    write_conc = write_concentration(torch.cat(wmass))
+    wmass.clear()
+    row_norm, eff_rank, n_kept = row_norm_stats(sigma), effective_rank(sigma), int(sigma.shape[0])
+    del sigma  # before build_atlas opens its own recorder passes
+    release_memory(device)
     _, tok_mean = build_atlas(model, data, n_episodes=atlas_episodes, device=device,
                               return_means=True)
     counts = np.bincount(data.tokens[:atlas_episodes].reshape(-1).astype(np.int64),
                          minlength=model.hcfg.vocab_size)
-    return {"row_norm": row_norm_stats(sigma), "effective_rank": effective_rank(sigma),
-            "activation": activation_sparsity(torch.cat(xs)),
-            "write_concentration": write_concentration(torch.cat(wmass)),
+    return {"row_norm": row_norm, "effective_rank": eff_rank, "activation": activation,
+            "write_concentration": write_conc,
             "atlas_selectivity": atlas_selectivity(tok_mean[level], counts),
-            "n_sample": int(sigma.shape[0]), "level": level, "exploratory": True}
+            "n_sample": n_kept, "level": level, "exploratory": True}

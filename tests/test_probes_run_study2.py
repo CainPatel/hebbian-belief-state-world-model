@@ -200,6 +200,26 @@ def test_measure_sigma_structure_is_invariant_to_the_episode_batch_size(tiny_dat
         assert flat(a[name]) == pytest.approx(flat(b[name]), rel=1e-6, abs=1e-9), name
 
 
+def test_structure_success_path_writes_the_measurement_file(tiny_data, tmp_path):
+    """M4's exit criterion is that `sigma_structure_L<level>.json` is PRODUCED.
+
+    The runner call is swallowed by design, so a break there fails no test and fails no run: the
+    1.5-day job would finish with the deliverable simply absent and one string in done.json. This is
+    the failure-containment test minus its monkeypatch, asserting the file actually appears.
+    """
+    torch.manual_seed(0)
+    run_dir = _write_ckpt(tmp_path, HBWMCore(TINY_BDH), "bdh", vars(TINY_BDH))
+    cfg = Study2Config(**{**vars(SMOKE), "structure": True, "structure_n_sample": 8})
+    out = run_probes_study2(run_dir, tiny_data.out_dir, cfg, device="cpu")
+    assert not out.get("structure_error"), out.get("structure_error")
+    f = run_dir / "probes2" / "sigma_structure_L1.json"
+    assert f.exists()
+    s = json.loads(f.read_text())
+    assert set(s) == {"row_norm", "effective_rank", "activation", "write_concentration",
+                      "atlas_selectivity", "n_sample", "level", "exploratory"}
+    assert s["level"] == 1 and s["exploratory"] is True and s["n_sample"] == 8
+
+
 def test_structure_failure_does_not_abort_the_probe_run(tiny_data, tmp_path, monkeypatch):
     import hbwm.probes.run as run_mod
 

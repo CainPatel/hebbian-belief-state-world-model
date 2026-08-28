@@ -391,8 +391,10 @@ def run_probes_study2(run_dir, data_dir, cfg: Study2Config, device=None) -> dict
             _stage_boundary(f"study2:L{level}", device)
             if cfg.structure and is_bdh:
                 try:  # exploratory (spec 4.8): must never cost the preregistered probe results
+                    # batch_eps is threaded through so the memory knob means one thing: an operator
+                    # lowering it under memory pressure must shrink THIS recorder pass too.
                     s = measure_sigma_structure(model, d_tr, p_tr, level, cfg.structure_n_sample,
-                                                cfg.seed, device)
+                                                cfg.seed, device, batch_eps=cfg.batch_eps)
                     (out / f"sigma_structure_L{level}.json").write_text(json.dumps(s, indent=2) + "\n")
                 except Exception as e:
                     summary_errors.append(repr(e))
