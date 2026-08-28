@@ -9,9 +9,9 @@ shared.
 import dataclasses
 
 import numpy as np  # noqa: F401
-import torch  # noqa: F401
+import torch
 import torch.nn.functional as F  # noqa: F401
-from torch import nn  # noqa: F401
+from torch import nn
 
 from hbwm.bdh.core import HBWMCore
 from hbwm.bdh.upstream.bdh import Attention  # noqa: F401
@@ -93,3 +93,77 @@ def param_count(family: str, shape: StateShape, n_classes: int, rank: int | None
             raise ValueError(f"{family} needs a rank")
         return nh * rank * P + C * nh * rank * Q
     raise ValueError(f"unknown family {family!r}")
+
+
+def _buf(v, n: int, fill: float) -> torch.Tensor:
+    if v is None:
+        return torch.full((n,), fill, dtype=torch.float32)
+    return torch.as_tensor(v, dtype=torch.float32).detach().reshape(n).clone()
+
+
+class StructuredProbe(nn.Module):
+    """Flat row [B, F] -> logits [B, C], standardizing internally like `LinearProbe`.
+
+    `set_positions` is the hook the derotated families need: the streamed evaluation path calls
+    `probe(xb)` with no extra arguments, so the runner stashes the batch's absolute token positions on
+    the module first. Every other family ignores it.
+    """
+
+    def __init__(self, n_features: int, n_classes: int, mean=None, std=None):
+        super().__init__()
+        self.n_features, self.n_classes = n_features, n_classes
+        self.register_buffer("mean", _buf(mean, n_features, 0.0))
+        self.register_buffer("std", _buf(std, n_features, 1.0))
+        self.bias = nn.Parameter(torch.zeros(n_classes))
+        self._positions = None
+
+    def set_positions(self, t) -> None:
+        self._positions = None if t is None else torch.as_tensor(t, dtype=torch.float32)
+
+    def standardize(self, x):
+        return (x - self.mean) / self.std
+
+    def readout_parameters(self):
+        """Parameters the L2 penalty applies to (spec 4.7 item 1): everything except the bias."""
+        return [p for n, p in self.named_parameters() if n != "bias"]
+
+
+class FlatLinearProbe(StructuredProbe):
+    """Spec 4.1. Study 1's sigma_full probe, refit under Study 2 conditions as the control."""
+
+    def __init__(self, shape: StateShape, n_classes: int, mean=None, std=None, gen=None):
+        super().__init__(shape.n_features, n_classes, mean, std)
+        self.shape = shape
+        w = torch.empty(n_classes, shape.n_features)
+        nn.init.normal_(w, std=shape.n_features**-0.5, generator=gen)
+        self.weight = nn.Parameter(w)
+
+    def forward(self, x, t=None):
+        return self.standardize(x) @ self.weight.T + self.bias
+
+
+class QueryRankProbe(StructuredProbe):
+    """Spec 4.2 (per-class queries) and 4.3 (`shared_query=True`)."""
+
+    def __init__(self, shape: StateShape, n_classes: int, rank: int, mean=None, std=None,
+                 shared_query: bool = False, gen=None):
+        super().__init__(shape.n_features, n_classes, mean, std)
+        self.shape, self.rank, self.shared_query = shape, rank, shared_query
+        nh, P, Q = shape.n_heads, shape.rows, shape.cols
+        q = torch.empty((nh, rank, P) if shared_query else (n_classes, nh, rank, P))
+        v = torch.empty(n_classes, nh, rank, Q)
+        # spec 4.7 item 2: q ~ N(0, 1/N), v ~ N(0, 1/D), i.e. std P^-0.5 and Q^-0.5.
+        nn.init.normal_(q, std=P**-0.5, generator=gen)
+        nn.init.normal_(v, std=Q**-0.5, generator=gen)
+        self.q, self.v = nn.Parameter(q), nn.Parameter(v)
+
+    def flat_weight(self):
+        """Implied per-class weight W[c, h, p, q], rank <= self.rank per head."""
+        if self.shared_query:
+            return torch.einsum("hjp,chjq->chpq", self.q, self.v)
+        return torch.einsum("chjp,chjq->chpq", self.q, self.v)
+
+    def forward(self, x, t=None):
+        s = self.shape
+        z = self.standardize(x).view(-1, s.n_heads, s.rows, s.cols)
+        return torch.einsum("bhpq,chpq->bc", z, self.flat_weight()) + self.bias
