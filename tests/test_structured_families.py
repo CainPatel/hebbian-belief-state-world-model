@@ -3,13 +3,20 @@ import torch
 
 from hbwm.probes.structured import (
     MLP_HIDDEN,
+    DerotProbe,
     FlatLinearProbe,
     MLPProbe,
     QueryRankProbe,
     StateShape,
     apply_randproj,
+    build_family,
+    family_specs,
     param_count,
     sparse_randproj,
+    spec_label,
+)
+from hbwm.probes.structured import (
+    QueryRankProbe as _QRP,
 )
 
 SHAPE = StateShape(n_heads=2, rows=8, cols=4, rotary=False)  # saturation_rank = 4
@@ -135,3 +142,64 @@ def test_shared_query_applies_one_identical_query_bank_to_every_class():
     for c in range(C):
         expected = torch.einsum("hjp,hjq->hpq", p.q, p.v[c])
         assert torch.allclose(W[c], expected, atol=1e-6)
+
+
+BDH_REF = StateShape(n_heads=4, rows=2048, cols=64, rotary=True)
+LSTM_REF = StateShape(n_heads=1, rows=4, cols=350, rotary=False)
+
+
+def test_family_specs_for_a_rotary_state():
+    labels = [spec_label(s) for s in family_specs(BDH_REF)]
+    assert labels == [
+        "flat_linear", "query_rank_1", "query_rank_4", "query_rank_16",
+        "shared_query_rank_1", "shared_query_rank_4", "shared_query_rank_16",
+        "derot_flat_linear", "derot_query_rank_1", "derot_query_rank_4", "derot_query_rank_16",
+        "mlp_state", "mlp_rownorm", "mlp_randproj",
+    ]
+
+
+def test_mlp_state_is_family_5s_matched_arm_on_every_state():
+    for shape in (BDH_REF, LSTM_REF, StateShape(n_heads=1, rows=20, cols=176, rotary=False)):
+        labels = [spec_label(s) for s in family_specs(shape)]
+        assert "mlp_state" in labels
+    bdh_only = {"mlp_rownorm", "mlp_randproj"}
+    assert bdh_only <= set(spec_label(s) for s in family_specs(BDH_REF))
+    assert not (bdh_only & set(spec_label(s) for s in family_specs(LSTM_REF)))
+
+
+def test_family_specs_for_a_baseline_state_drop_the_derot_arms():
+    labels = [spec_label(s) for s in family_specs(LSTM_REF)]
+    assert labels == [
+        "flat_linear", "query_rank_1", "query_rank_4", "query_rank_16",
+        "shared_query_rank_1", "shared_query_rank_4", "shared_query_rank_16", "mlp_state",
+    ]
+    assert not any(lbl.startswith("derot") for lbl in labels)
+
+
+def test_restarts_are_three_for_factorized_families_and_one_otherwise():
+    got = {spec_label(s): s.n_restarts for s in family_specs(BDH_REF)}
+    assert got["query_rank_4"] == 3 and got["shared_query_rank_4"] == 3
+    assert got["derot_query_rank_4"] == 3
+    assert got["flat_linear"] == 1 and got["derot_flat_linear"] == 1
+    assert got["mlp_state"] == 1 and got["mlp_rownorm"] == 1
+
+
+def test_matched_family_contract_every_family_builds_on_every_state():
+    tiny_bdh = StateShape(n_heads=2, rows=8, cols=4, rotary=True)
+    tiny_lstm = StateShape(n_heads=1, rows=4, cols=6, rotary=False)
+    freqs = torch.rand(tiny_bdh.rows)
+    for shape, f in ((tiny_bdh, freqs), (tiny_lstm, None)):
+        for spec in family_specs(shape):
+            n_in = {"flat": shape.n_features, "state": shape.n_features,
+                    "rownorm": shape.n_heads * shape.rows, "randproj": 12}[spec.input_kind]
+            p = build_family(spec, shape, C, n_in, freqs=f)
+            x = torch.randn(3, n_in)
+            p.set_positions(torch.zeros(3))
+            assert p(x).shape == (3, C), spec_label(spec)
+
+
+def test_derot_families_wrap_only_on_a_rotary_state():
+    tiny = StateShape(n_heads=2, rows=8, cols=4, rotary=True)
+    spec = next(s for s in family_specs(tiny) if spec_label(s) == "derot_query_rank_4")
+    p = build_family(spec, tiny, C, tiny.n_features, freqs=torch.rand(tiny.rows))
+    assert isinstance(p, DerotProbe) and isinstance(p.inner, _QRP)

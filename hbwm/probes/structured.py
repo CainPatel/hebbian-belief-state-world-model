@@ -258,3 +258,57 @@ class DerotProbe(StructuredProbe):
         # fitting and the streamed passes get exactly the same input distribution.
         z = x.view(-1, s.n_heads, s.rows, s.cols)
         return self.inner(self.standardize(derotate(z, pos, self.freqs).reshape(x.shape[0], -1)))
+
+
+@dataclasses.dataclass(frozen=True)
+class FamilySpec:
+    name: str
+    rank: int | None = None
+    input_kind: str = "flat"  # flat | rownorm | randproj | state
+    n_restarts: int = 1
+
+
+def spec_label(spec: FamilySpec) -> str:
+    return spec.name if spec.rank is None else spec.name.replace("_rank_r", f"_rank_{spec.rank}")
+
+
+def family_specs(shape: StateShape) -> list[FamilySpec]:
+    """The preregistered Study 2 family set for one state (spec 4.1 to 4.5, 5.1).
+
+    Family 6 (`synapse_atlas`) is exploratory and is not in this list. On a non-rotary state the two
+    derot families ARE their undecorated counterparts, so they are not refitted; the aggregation records
+    them as aliases (spec 5.1).
+    """
+    out = [FamilySpec("flat_linear")]
+    out += [FamilySpec("query_rank_r", r, n_restarts=STUDY2_RESTARTS) for r in STUDY2_RANKS]
+    out += [FamilySpec("shared_query_rank_r", r, n_restarts=STUDY2_RESTARTS) for r in STUDY2_RANKS]
+    if shape.rotary:
+        out.append(FamilySpec("derot_flat_linear"))
+        out += [FamilySpec("derot_query_rank_r", r, n_restarts=STUDY2_RESTARTS) for r in STUDY2_RANKS]
+    out.append(FamilySpec("mlp_state", input_kind="state"))  # family 5's matched arm, every state
+    if shape.rotary:  # the two reductions have no baseline counterpart (spec 4.5)
+        out += [FamilySpec("mlp_rownorm", input_kind="rownorm"),
+                FamilySpec("mlp_randproj", input_kind="randproj")]
+    return out
+
+
+def build_family(spec: FamilySpec, shape: StateShape, n_classes: int, n_input: int, mean=None,
+                 std=None, freqs=None, gen=None) -> StructuredProbe:
+    name = spec.name
+    if name.startswith("mlp_"):
+        return MLPProbe(n_input, n_classes, MLP_HIDDEN, mean, std, gen)
+    if name.startswith("derot_"):
+        plain = FamilySpec(name[len("derot_"):], spec.rank)
+        if not shape.rotary:  # spec 5.1: nothing to undo, so the matched arm IS the plain family
+            return build_family(plain, shape, n_classes, n_input, mean, std, gen=gen)
+        if freqs is None:
+            raise ValueError(f"{spec_label(spec)} needs the model's rope frequencies")
+        # The wrapper owns standardization (Task 4): the inner probe gets the identity transform.
+        inner = build_family(plain, shape, n_classes, n_input, gen=gen)
+        return DerotProbe(inner, shape, freqs, mean, std)
+    if name == "flat_linear":
+        return FlatLinearProbe(shape, n_classes, mean, std, gen)
+    if name in ("query_rank_r", "shared_query_rank_r"):
+        return QueryRankProbe(shape, n_classes, spec.rank, mean, std,
+                              shared_query=(name == "shared_query_rank_r"), gen=gen)
+    raise ValueError(f"unknown family {name!r}")
