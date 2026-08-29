@@ -91,9 +91,12 @@ def activation_sparsity(x_sparse) -> dict:
 def atlas_selectivity(tok_mean, token_counts) -> dict:
     """Spec 4.8 measurement 5: peakedness of each neuron's token-conditional mean activation.
 
-    tok_mean: [V, nh, N] for ONE level. Tokens with zero `token_counts` are dropped (PAD is unused, so
-    33 of the 34 vocabulary entries survive). `x_sparse` is a ReLU output, so the profile is
-    nonnegative and normalizes to a distribution.
+    tok_mean: [V, nh, N] for ONE level. Tokens with zero `token_counts` are dropped, and the entropy
+    denominator is log of however many survive. On the 9x9 grid that is 29 of the 34 vocabulary
+    entries: PAD is unused, and the vocabulary reserves coordinate slots up to MAX_G = 11, so
+    x = 9, 10 (ids 15, 16) and y = 9, 10 (ids 26, 27) never occur. Spec 4.8 says 33 because it
+    accounted for PAD alone; the rule implemented here is the spec's, only its arithmetic was off.
+    `x_sparse` is a ReLU output, so the profile is nonnegative and normalizes to a distribution.
     """
     m = torch.as_tensor(tok_mean, dtype=torch.float64)
     keep = torch.as_tensor(np.asarray(token_counts) > 0)

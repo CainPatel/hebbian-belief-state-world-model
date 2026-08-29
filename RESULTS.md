@@ -748,7 +748,7 @@ Context (BDH-only, decides nothing): `mlp_randproj` at 0.121 against `derot_quer
   readout format or parameter estimation. It does **not** mean the gain is about associative,
   query-addressed structure. The spec's own risk table requires this to be stated here: **H5 alone
   cannot separate format from estimation efficiency**, and H7 is the control that separates them.
-  The parameter counts are the reason: the winning arm fits 0.68 M to 2.74 M parameters where
+  The parameter counts are the most likely reason: the winning arm fits 0.68 M to 2.74 M parameters where
   `flat_linear` fits 42.5 M, on the same 24,000 examples.
 - **H7 (attribution, gates nothing): attribute to capacity, True.** `mlp_rownorm` reaches 0.144
   against the best structured readout's 0.159, a gap of -0.015, inside the preregistered 2-point
@@ -759,8 +759,9 @@ Context (BDH-only, decides nothing): `mlp_randproj` at 0.121 against `derot_quer
   that the +0.058 over the flat probe is attributable to capacity and nonlinearity and is **not**
   demonstrated to be about query-addressed associative structure. For context, and deciding nothing:
   `mlp_randproj`, the fixed sparse-sign projection, reaches 0.121 against 0.159, a gap of -0.038,
-  and does not attribute to capacity, so the row-norm reduction is doing real work that a random
-  projection of the same output width does not.
+  and does not attribute to capacity, so the row-norm reduction outperforms a fixed sparse-sign
+  projection at half the reduced width (8,192 to 512 against 4,096 to 512, 4.24 M parameters
+  against 2.14 M). The two are not width-matched, so this comparison decides nothing.
 - **H8 (belief revision): supported for all three models, and it reverses Study 1's H3.** Under the
   preregistered clock, latency is measured from t0, the first step at or after re-observation at
   which the object is **not** visible. The fraction of episodes revising within 5 steps is
@@ -777,7 +778,7 @@ Context (BDH-only, decides nothing): `mlp_randproj` at 0.121 against `derot_quer
 - **Reproduction checks: Study 2 measures what Study 1 measured.** Two independent checks, neither
   of which decides anything. First, BDH's `flat_linear` arm, which is Study 1's `sigma_full` probe
   refit under Study 2's own machinery (restarts, a `--families` code path, a fresh trainer), lands
-  at **0.101**, reproducing Study 1's 0.101 exactly. Second, the cross-study bridge rows refit
+  at **0.101** (0.100815), reproducing Study 1's 0.101 to the reported precision. Second, the cross-study bridge rows refit
   `flat_linear` on both baseline states at the full 61,400-pair budget and give lstm **0.170** and
   rwkv **0.218**, against Study 1's 0.171 and 0.218. The two studies' numbers are therefore directly
   comparable and the H6 negative is not an artifact of new machinery. **The bridge rows are
@@ -813,7 +814,7 @@ is a median over that subsample; per-cell 10th and 90th percentiles are in
 Read across the four checkpoint-levels:
 
 - **Row-norm sparsity.** The participation ratio of the squared row norms is 73 to 111 effective
-  neurons out of 2,048, so roughly 4 to 5 percent of the rows carry the mass. The fraction of rows
+  neurons out of 2,048, so roughly 3.5 to 5.5 percent of the rows carry the mass. The fraction of rows
   below 1% of the row-norm max is 0.11 to 0.24.
 - **Effective rank.** 8 to 10 singular components reach 90% of the squared Frobenius mass and 29 to
   32 reach 99%, out of a maximum of 64; the spectral participation ratio is 2.2 to 3.0.
@@ -825,7 +826,9 @@ Read across the four checkpoint-levels:
 - **Atlas selectivity.** Median max-share over the token-conditional activation profile is 0.159 to
   0.234 and median normalized entropy is 0.69 to 0.81, with only 0.055 to 0.224 of live neurons
   exceeding a max-share of 0.5. A concept-aligned basis would show a heavy tail of low-entropy,
-  high-max-share neurons. This does not.
+  high-max-share neurons. A minority of roughly 6 to 22 percent of live neurons are single-token
+  dominated, and the p90 of max-share reaches 0.757 at seed0 L3, so the tail is not empty; but the
+  bulk of the distribution is not concept-aligned.
   The normalized-entropy denominator is ln(29), not ln(33): 29 of the 34 vocabulary entries
   actually occur in the 500-episode atlas sample. The five that never occur are `PAD` plus the four
   coordinate slots the 34-token vocabulary reserves for grids up to 11 wide (x = 9, 10 and y = 9,
@@ -838,8 +841,8 @@ the mass, and 8 to 10 components out of 64 carry 90% of it. But its neuron basis
 **distributed rather than concept-aligned**: most neurons spread their activation broadly across the
 vocabulary, and only a small minority are dominated by a single token. That is the question H4 could
 not separate, and it is answered here in a way that is consistent with everything above. Structural
-sparsity is real; concept-alignment is not, and that is why sparsity alone never made sigma
-readable. This is exploratory and cannot revise H4, which stands as reported.
+sparsity is real; concept-alignment is not, and that is consistent with why sparsity alone never
+made sigma readable. This is exploratory and cannot revise H4, which stands as reported.
 
 The preliminary version of measurements 1 to 4, run before this implementation existed on the single
 checkpoint `runs/study1/bdh_g100_lr0.003/seed0/ckpt.pt` at levels 0, 3 and 5, is reported above
