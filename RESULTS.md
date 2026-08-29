@@ -826,6 +826,12 @@ Read across the four checkpoint-levels:
   0.234 and median normalized entropy is 0.69 to 0.81, with only 0.055 to 0.224 of live neurons
   exceeding a max-share of 0.5. A concept-aligned basis would show a heavy tail of low-entropy,
   high-max-share neurons. This does not.
+  The normalized-entropy denominator is ln(29), not ln(33): 29 of the 34 vocabulary entries
+  actually occur in the 500-episode atlas sample. The five that never occur are `PAD` plus the four
+  coordinate slots the 34-token vocabulary reserves for grids up to 11 wide (x = 9, 10 and y = 9,
+  10), which a 9x9 grid never reaches. Spec 4.8 anticipated 33 by accounting for `PAD` alone, so
+  this is a correction to the spec's arithmetic rather than a deviation in the measurement, and it
+  changes nothing preregistered.
 
 **The honest reading.** Sigma **is** structurally sparse and low rank: a few percent of rows carry
 the mass, and 8 to 10 components out of 64 carry 90% of it. But its neuron basis is largely
