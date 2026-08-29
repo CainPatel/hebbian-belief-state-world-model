@@ -1,7 +1,6 @@
 {
   "_note": "Keys prefixed `doc_` are DOCUMENTATION of the preregistered grid, not inputs: nothing reads them. `doc_ranks` is the rank grid, whose live source is `STUDY2_RANKS` in hbwm/probes/structured.py; `doc_n_restarts` is the restart count for the factorized families, whose live source is `STUDY2_RESTARTS` in the same module (reaching the trainer as `FamilySpec.n_restarts`). `ckpt_train_lr` is the Study 1 TRAINING learning rate that identifies which checkpoints are probed (`STUDY2_LR` in hbwm/matrix.py), NOT a probe hyperparameter; `probe_lr` is the probe optimizer's learning rate, the `Study2Config.lr` field. Every other key names a real `Study2Config` field or a matrix-level selector.",
   "exp": "study2",
-  "src_exp": "study1",
   "ckpt_train_lr": 0.003,
   "seeds": [0, 1, 2],
   "models": ["bdh_g100", "lstm", "rwkv"],

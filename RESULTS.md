@@ -626,8 +626,218 @@ Decision rules: see README.md, "Preregistration (Study 2)". Preregistration comm
 `e674b1da138f905670dde5571e1a1890b134fe36`. Every Study 2 number reported below was produced by runs
 started after that commit was pushed to public `main`.
 
-## Study 2 headline (filled by Task 15)
+## Study 2 headline
 
-- Probe accuracy by family with effective rank fractions, H5 to H8 decisions, bridge rows:
-  copied from `runs/study1/results2/results.md`.
-- Exploratory sigma-structure measurements: `runs/study1/*/seed*/probes2/sigma_structure_L*.json`.
+Study 2 is complete. The headline hypothesis **H6 was not supported**, and the preregistered kill
+criterion fired. This is a preregistered negative result. The decisions below were taken strictly
+under the rules frozen at preregistration commit
+`be8290e2f38cd30db336761db3aa733b2ad4b2ee`, before any Study 2 run.
+
+The preregistered consequence applies exactly as written in spec section 7: "if H6 fails against the
+LSTM state under matched families, the 'sigma as a linearly or bilinearly readable belief state'
+line is closed. Write up and pivot to the imagination study, or abandon." **That line is now
+closed.** Study 1 asked whether a flat linear probe can read beliefs out of sigma and got 0.101.
+Study 2 gave sigma the readout family that matches how the architecture actually addresses it,
+matched on the baselines, and BDH still does not beat the LSTM state by the preregistered margin.
+H5 is supported, and H5 is not a rescue: its capacity control, H7, came back
+attribute-to-capacity **True**.
+
+### Aggregated results
+
+Pasted from `runs/study1/results2/results.md`, produced by
+`uv run python -m hbwm.matrix --phase study2-evaluate --exp study1`. Numbers are verbatim; only the
+heading levels are demoted one step so the tables nest under this section.
+
+#### Study 2 probe accuracy (test, best level and hyperparameter per seed; mean over 3 seeds)
+
+| model | family | rank | eff. rank frac | saturated | degenerate | train acc | val acc | test acc | #params | n_train |
+|---|---|---|---|---|---|---|---|---|---|---|
+| bdh_g100 | derot_flat_linear | - | - | False | False | 0.870 | 0.121 | 0.122 ± 0.011 | 42467328 | 24000 |
+| bdh_g100 | derot_query_rank_r | [1, 4, 1] | [0.02, 0.06, 0.02] | False | False | 0.611 | 0.160 | 0.159 ± 0.017 | [684288, 2737152, 684288] | 24000 |
+| bdh_g100 | flat_linear | - | - | False | False | 0.695 | 0.104 | 0.101 ± 0.008 | 42467328 | 24000 |
+| bdh_g100 | mlp_randproj | - | - | False | False | 0.823 | 0.127 | 0.121 ± 0.013 | 2138624 | 24000 |
+| bdh_g100 | mlp_rownorm | - | - | False | False | 0.741 | 0.141 | 0.144 ± 0.012 | 4235776 | 24000 |
+| bdh_g100 | mlp_state | - | - | False | False | 0.726 | 0.104 | 0.101 ± 0.007 | 268476928 | 24000 |
+| bdh_g100 | query_rank_r | [16, 1, 4] | [0.25, 0.02, 0.06] | False | False | 0.548 | 0.141 | 0.135 ± 0.019 | [10948608, 684288, 2737152] | 24000 |
+| bdh_g100 | shared_query_rank_r | [4, 1, 16] | [0.06, 0.02, 0.25] | False | False | 0.539 | 0.145 | 0.141 ± 0.011 | [115712, 28928, 462848] | 24000 |
+| lstm | flat_linear | - | - | False | False | 0.298 | 0.115 | 0.116 ± 0.005 | 113400 | 24000 |
+| lstm | mlp_state | - | - | False | False | 0.492 | 0.144 | 0.146 ± 0.006 | 758272 | 24000 |
+| lstm | query_rank_r | [16, 16, 4] | 1.00 | True | False | 0.283 | 0.113 | 0.113 ± 0.006 | [458784, 458784, 114696] | 24000 |
+| lstm | shared_query_rank_r | [4, 4, 16] | 1.00 | True | False | 0.296 | 0.112 | 0.113 ± 0.004 | [113416, 113416, 453664] | 24000 |
+| rwkv | flat_linear | - | - | False | False | 0.415 | 0.148 | 0.148 ± 0.005 | 285120 | 24000 |
+| rwkv | mlp_state | - | - | False | False | 0.602 | 0.157 | 0.165 ± 0.006 | 1843712 | 24000 |
+| rwkv | query_rank_r | 16 | 0.80 | False | False | 0.344 | 0.143 | 0.145 ± 0.003 | 254016 | 24000 |
+| rwkv | shared_query_rank_r | 16 | 0.80 | False | False | 0.370 | 0.143 | 0.142 ± 0.003 | 228416 | 24000 |
+
+Degeneracy criterion (preregistered, spec 7): an arm is degenerate, and excluded from H6's best-matched-family selection, if its training accuracy exceeds 0.95 while its validation accuracy stays below 0.022 (twice the majority-class chance rate 0.011) at every L2 value. Degenerate arms are still fitted and still reported above with their parameter count and training accuracy, so the call can be audited. `mlp_state` on BDH has 268,476,928 weights in total against 24,000 training examples, which is the number to read that row by. Of those, the first layer alone is 524,288 x 512 = 268,435,456 weights (spec 5.2); the remainder is the 512 x n_classes output layer of Appendix B's count.
+
+Family 5 membership: BDH carries `mlp_state` plus the two BDH-only reductions `mlp_rownorm` and `mlp_randproj`; each baseline carries `mlp_state` alone, because row norms of a 4 x 350 or 20 x 176 reshape are not a control and projecting 1,400 up to 4,096 is an expansion. H6's family 5 comparison is therefore `mlp_state` against `mlp_state` against `mlp_state`; the reductions are context and feed H7.
+
+Random projection (spec 4.5, `mlp_randproj`): a FIXED, not-learned sparse sign matrix with 64 nonzeros per output dimension, drawn with signs [-1, 1] from seed 0, mapping the standardized_flat_sigma to 4096 dimensions. Recorded per run in `probes2/done.json`; read here from bdh_g100/seed0.
+
+#### H5 (format and estimation) supported: **True**
+
+Best structured family `derot_query_rank_r` at 0.159 against `flat_linear` at 0.101; mean diff +0.058, paired diffs [0.066, 0.043, 0.067].
+
+#### H6 (headline) supported: **False**, carried by `derot_query_rank_r`
+
+| comparator | mean | mean diff | paired diffs | passes | saturated arm |
+|---|---|---|---|---|---|
+| lstm | 0.113 | +0.046 | [0.042, 0.031, 0.065] | False | True |
+| rwkv | 0.145 | +0.014 | [0.02, -0.008, 0.029] | False | False |
+
+Kill criterion fired: **True**. Rank-constraint artifact warning: **False**.
+
+Families eligible for H6 after the degeneracy criterion: `derot_flat_linear`, `derot_query_rank_r`, `flat_linear`, `mlp_state`, `query_rank_r`, `shared_query_rank_r`. Excluded as degenerate: none.
+
+#### H7 (attribution, gates nothing)
+
+Verdict: `mlp_rownorm` at 0.144 against `derot_query_rank_r` at 0.159; attribute to capacity: **True**.
+
+Context (BDH-only, decides nothing): `mlp_randproj` at 0.121 against `derot_query_rank_r` at 0.159; attribute to capacity: **False**.
+
+#### H8 (belief revision, clock rebaselined to the first not-visible step)
+
+| model | mean frac(latency <= 5) | excluded n | episodes n | excluded n per seed | mean excluded frac | low coverage | supported |
+|---|---|---|---|---|---|---|---|
+| bdh_g100 | 0.771 | 51 | 1866 | [17, 17, 17] | 0.027 | False | True |
+| lstm | 0.969 | 51 | 1866 | [17, 17, 17] | 0.027 | False | True |
+| rwkv | 0.976 | 51 | 1866 | [17, 17, 17] | 0.027 | False | True |
+
+#### Cross-study bridge rows (continuity only, decide nothing)
+
+| model | flat_linear acc | n_train pairs |
+|---|---|---|
+| lstm | 0.170 | 61400 |
+| rwkv | 0.218 | 61400 |
+
+### Decisions under the preregistered rules
+
+- **H6 (the headline): not supported. Kill criterion fired.** The rule is a 5-point mean margin over
+  *both* baseline states with all three paired-by-seed differences positive, within the best matched
+  family. The best matched family is `derot_query_rank_r` at 0.159 on BDH. Against the LSTM state
+  (0.113) the mean difference is +0.046, which is below the 5-point bar even though all three paired
+  differences are positive ([0.042, 0.031, 0.065]). Against the RWKV state (0.145) the mean
+  difference is +0.014, below the bar, and one paired difference is **negative** (-0.008 on seed 1),
+  so that comparison fails on both counts. The preregistered kill condition is "H6 fails against the
+  LSTM state under matched families", which is exactly what happened. The line is closed and the
+  preregistered response is to write up and pivot, not to keep tuning readouts.
+- **H6 read against the reshape-free families, as spec 5.2 and the H6 rule require.** The LSTM's
+  factorized arms are **rank-saturated**: its 4 x 350 reshape saturates at r = 4, and the
+  preregistered grid's r = 4 and r = 16 both sit at or past that, so `query_rank_r` and
+  `shared_query_rank_r` on the LSTM carry effective rank fraction 1.00 and are `flat_linear` in a
+  different parameterization. The rule therefore requires the reading to be checked against
+  families 1 and 5, whose baseline arms cannot saturate. That reading is **worse for BDH, not
+  better**: on `flat_linear`, BDH 0.101 against lstm 0.116 and rwkv 0.148; on `mlp_state`, BDH 0.101
+  against lstm 0.146 and rwkv 0.165. BDH loses both reshape-free comparisons outright. The
+  `artifact_warning` flag is **False**, and it is False only because BDH did not win: the saturation
+  caveat exists to qualify a BDH win over a saturated baseline arm, and there was no win to qualify.
+  It is not an all-clear.
+- **Eligibility and degeneracy: nothing was excluded.** All six matched families were eligible for
+  H6's selection: `derot_flat_linear`, `derot_query_rank_r`, `flat_linear`, `mlp_state`,
+  `query_rank_r`, `shared_query_rank_r`. The preregistered degeneracy criterion (train accuracy
+  above 0.95 with validation accuracy below 0.022 at every L2 value) excluded **no arm**. In
+  particular `mlp_state` on BDH, the arm the criterion was written for, did not trip it: its 268.5 M
+  parameters against 24,000 examples reached train 0.726 and val 0.104, so it decided H6 on the same
+  footing as every other arm. Every arm's parameter count, `n_train`, and training accuracy are in
+  the table above so the call can be audited rather than taken on trust.
+- **H5 (format and estimation): supported, and it must not be read alone.** The best structured
+  sigma readout, `derot_query_rank_r` at 0.159, beats `flat_linear` on sigma at 0.101 by +0.058,
+  clearing the 5-point margin, with all three paired-by-seed differences positive
+  ([0.066, 0.043, 0.067]). Supported means Study 1's H1 failure was at least partly an artifact of
+  readout format or parameter estimation. It does **not** mean the gain is about associative,
+  query-addressed structure. The spec's own risk table requires this to be stated here: **H5 alone
+  cannot separate format from estimation efficiency**, and H7 is the control that separates them.
+  The parameter counts are the reason: the winning arm fits 0.68 M to 2.74 M parameters where
+  `flat_linear` fits 42.5 M, on the same 24,000 examples.
+- **H7 (attribution, gates nothing): attribute to capacity, True.** `mlp_rownorm` reaches 0.144
+  against the best structured readout's 0.159, a gap of -0.015, inside the preregistered 2-point
+  tolerance, so the rule attributes the gain to capacity and nonlinearity rather than to associative
+  structure. This is the decisive qualifier on H5. `mlp_rownorm` is a plain MLP on
+  rotation-invariant row norms with **no query structure at all**, and it lands within 1.5 points of
+  the best bilinear readout on 4.24 M parameters. Read together, as the rules require, H5 and H7 say
+  that the +0.058 over the flat probe is attributable to capacity and nonlinearity and is **not**
+  demonstrated to be about query-addressed associative structure. For context, and deciding nothing:
+  `mlp_randproj`, the fixed sparse-sign projection, reaches 0.121 against 0.159, a gap of -0.038,
+  and does not attribute to capacity, so the row-norm reduction is doing real work that a random
+  projection of the same output width does not.
+- **H8 (belief revision): supported for all three models, and it reverses Study 1's H3.** Under the
+  preregistered clock, latency is measured from t0, the first step at or after re-observation at
+  which the object is **not** visible. The fraction of episodes revising within 5 steps is
+  bdh_g100 **0.771**, lstm 0.969, rwkv 0.976, all above the 0.70 bar. Study 1's H3 measured
+  bdh_g100 at 0.157 and concluded BDH does not revise its beliefs; that conclusion was an artifact
+  of the clock. Study 1 started counting at the re-observation step itself, while the answer was
+  still inside the agent's 3x3 window, so it charged BDH for steps on which no revision was
+  measurable. **This changes the Study 1 conclusion about belief revision.** It does not make BDH
+  competitive: 0.771 still trails both baselines substantially (0.969 and 0.976), so the honest
+  reading is that BDH revises, but more slowly and less reliably than either baseline. Coverage:
+  51 of 1,866 moved-and-re-observed episodes (2.7%, 17 per seed) have no t0 because the agent stays
+  adjacent to the moved object through the end of the episode; those are excluded from the
+  denominator, not counted as failures, and the 25% low-coverage flag did **not** trip.
+- **Reproduction checks: Study 2 measures what Study 1 measured.** Two independent checks, neither
+  of which decides anything. First, BDH's `flat_linear` arm, which is Study 1's `sigma_full` probe
+  refit under Study 2's own machinery (restarts, a `--families` code path, a fresh trainer), lands
+  at **0.101**, reproducing Study 1's 0.101 exactly. Second, the cross-study bridge rows refit
+  `flat_linear` on both baseline states at the full 61,400-pair budget and give lstm **0.170** and
+  rwkv **0.218**, against Study 1's 0.171 and 0.218. The two studies' numbers are therefore directly
+  comparable and the H6 negative is not an artifact of new machinery. **The bridge rows are
+  continuity only and are used by no decision rule**; H6 remains the matched 24,000-pair comparison.
+- **Selection budget, so the reader can discount it.** Rank, L2, restart, level and family were all
+  selected on `probe_val`, which is 1,000 held-out episodes disjoint from both `probe_train` and
+  `probe_test`. Every number reported above is on `probe_test`. Selecting five things on validation
+  inflates the winner; the reproduction checks above are the check that the inflation is not
+  carrying the result.
+
+### Exploratory: descriptive structure of sigma (spec 4.8)
+
+**These decide nothing.** No number below is a criterion, none of them can support or refute H5 to
+H8, and none of them was preregistered. They exist because Study 1 never actually answered whether
+sigma is sparse: H4 asked the narrower question of whether the *decodable* signal concentrates in
+few features, and its negative (median k90 = 524,288, the full feature count) is entangled with H1's
+negative, because the feature ranking it used came from a probe that only reached 0.101. "No sparse
+decodable subset" and "nothing decodable to concentrate" are not separated by that result.
+
+Measured on the four BDH checkpoint-levels Study 2 probes, on a fixed seeded 1,024-row subsample of
+the cached `probe_train` features per checkpoint-level, on the **unstandardized** state. Every cell
+is a median over that subsample; per-cell 10th and 90th percentiles are in
+`runs/study1/results2/structure.json` and in the per-run
+`runs/study1/*/seed*/probes2/sigma_structure_L*.json`.
+
+| checkpoint-level | row-norm PR (of 2048) | frac rows < 1% of max | 90% comps (/64) | 99% comps (/64) | SV-PR (/64) | write top 1% | write top 10% | ReLU zero frac | atlas max-share | atlas norm. entropy | frac max-share > 0.5 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| seed0 L3 | 110.9 | 0.182 | 10 | 32 | 2.78 | 0.089 | 0.478 | 0.832 | 0.181 | 0.748 | 0.191 |
+| seed0 L4 | 103.1 | 0.151 | 8 | 29 | 2.37 | 0.084 | 0.426 | 0.844 | 0.159 | 0.793 | 0.114 |
+| seed1 L3 | 73.3 | 0.238 | 9 | 32 | 2.17 | 0.111 | 0.555 | 0.829 | 0.234 | 0.692 | 0.224 |
+| seed2 L4 | 104.8 | 0.113 | 10 | 30 | 3.00 | 0.067 | 0.413 | 0.797 | 0.165 | 0.808 | 0.055 |
+
+Read across the four checkpoint-levels:
+
+- **Row-norm sparsity.** The participation ratio of the squared row norms is 73 to 111 effective
+  neurons out of 2,048, so roughly 4 to 5 percent of the rows carry the mass. The fraction of rows
+  below 1% of the row-norm max is 0.11 to 0.24.
+- **Effective rank.** 8 to 10 singular components reach 90% of the squared Frobenius mass and 29 to
+  32 reach 99%, out of a maximum of 64; the spectral participation ratio is 2.2 to 3.0.
+- **Write concentration.** The top 1% of rows (20 of 2,048) receive 0.067 to 0.111 of the total
+  write mass and the top 10% receive 0.41 to 0.56.
+- **Activation sparsity.** The ReLU zero fraction of `x_sparse` at the same timesteps is 0.80 to
+  0.84. This is a property of the write key, not of the accumulated state, and is reported as
+  contrast only.
+- **Atlas selectivity.** Median max-share over the token-conditional activation profile is 0.159 to
+  0.234 and median normalized entropy is 0.69 to 0.81, with only 0.055 to 0.224 of live neurons
+  exceeding a max-share of 0.5. A concept-aligned basis would show a heavy tail of low-entropy,
+  high-max-share neurons. This does not.
+
+**The honest reading.** Sigma **is** structurally sparse and low rank: a few percent of rows carry
+the mass, and 8 to 10 components out of 64 carry 90% of it. But its neuron basis is largely
+**distributed rather than concept-aligned**: most neurons spread their activation broadly across the
+vocabulary, and only a small minority are dominated by a single token. That is the question H4 could
+not separate, and it is answered here in a way that is consistent with everything above. Structural
+sparsity is real; concept-alignment is not, and that is why sparsity alone never made sigma
+readable. This is exploratory and cannot revise H4, which stands as reported.
+
+The preliminary version of measurements 1 to 4, run before this implementation existed on the single
+checkpoint `runs/study1/bdh_g100_lr0.003/seed0/ckpt.pt` at levels 0, 3 and 5, is reported above
+under "Post-hoc analyses (exploratory, not preregistered) (a) Sigma is structurally sparse and
+lowish rank" and is labeled there with its checkpoint, levels and method. It is a different sample
+and a different normalization from the table here and the two are not interchangeable; the table
+here is the specified measurement.

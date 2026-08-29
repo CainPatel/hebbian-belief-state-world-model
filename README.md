@@ -88,7 +88,7 @@ preregistered decision**, and none of them rescues H1. Scripts are in
 - **[RESULTS.md](RESULTS.md)**: every number, every table, the caveats, the post-hoc analyses.
 - **[docs/PREREGISTRATION.md](docs/PREREGISTRATION.md)**: the frozen rules, reproduced from commit `e674b1da138f905670dde5571e1a1890b134fe36`.
 - **[SPEC.md](SPEC.md)** and the **[Study 1 design](docs/superpowers/specs/2026-08-22-hbwm-study1-design.md)**: the research proposal, and the buildable spec that governs Study 1.
-- **[Study 2 design](docs/superpowers/specs/2026-08-27-hbwm-study2-associative-readout-design.md)** and **[plan](docs/superpowers/plans/2026-08-27-hbwm-study2.md)**: associative readout of $\sigma$, designed and preregistered, not run.
+- **[Study 2 design](docs/superpowers/specs/2026-08-27-hbwm-study2-associative-readout-design.md)** and **[plan](docs/superpowers/plans/2026-08-27-hbwm-study2.md)**: associative readout of $\sigma$, run and complete. H6 was not supported and the preregistered kill criterion fired; see RESULTS.md, "Study 2 headline".
 - **[analysis/posthoc/](analysis/posthoc/)**: the three exploratory scripts behind the post-hoc findings.
 - **[docs/hf/](docs/hf/)**: model and dataset cards for optional Hugging Face artifact hosting.
 
@@ -165,7 +165,7 @@ uv run python -m hbwm.matrix --phase study2-evaluate --exp study1
 # 0. Environment. pyproject requires Python >= 3.12 and torch >= 2.5; Study 1 ran on
 #    Python 3.13.5, torch 2.13.0, numpy 2.5.2 (pinned in uv.lock).
 uv sync --extra dev            # add --extra viz for hbwm.viz.heatmaps' animated GIFs
-uv run pytest                  # 115 tests, CPU, tiny configs, about 10 s
+uv run pytest                  # 218 tests, CPU, tiny configs, about 10 s
 
 # 1. Data: 27,000 episodes into data/grid9/{split}.npz (about 31 s, ~14 MB compressed).
 #    Every episode is a pure function of its seed, so this regenerates bit-identically.
@@ -219,7 +219,7 @@ CUDA is in-spec but untested; CPU is fully supported and is what the test suite 
 | `hbwm/` | `train.py`, `matrix.py`, `models.py`, `config.py`, `device.py`, `losses.py`, `sanity_shakespeare.py`, `viz/heatmaps.py` (the exploratory belief-map CLI) |
 | `experiments/` | `data/grid9.json`, `train/{bdh_g100,bdh_g099,bdh_g097,lstm,rwkv}.json` |
 | `analysis/posthoc/`, `notebooks/` | exploratory, read-only on `runs/` and `data/` |
-| `tests/` | 115 tests, all CPU, tiny configs, including the equivalence contract and the decision-rule units |
+| `tests/` | 218 tests, all CPU, tiny configs, including the equivalence contract and the decision-rule units |
 
 ## Data and artifacts
 
