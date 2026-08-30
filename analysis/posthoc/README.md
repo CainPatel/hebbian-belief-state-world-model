@@ -1,72 +1,113 @@
 # Post-hoc analysis scripts
 
-Three exploratory, descriptive scripts run **after** Study 1 closed. Their findings are written up in
-[RESULTS.md](../../RESULTS.md) under "Post-hoc analyses (exploratory, not preregistered)" and
-summarized in [docs/EXPLAINER.md](../../docs/EXPLAINER.md) section 8.
+Exploratory, descriptive scripts run **after** a preregistered study closed. Their findings are
+written up in [RESULTS.md](../../RESULTS.md) under the two "post-hoc" headings and, for the Study 1
+set, summarized in [docs/EXPLAINER.md](../../docs/EXPLAINER.md) section 8.
 
 **They decide nothing.** None of them was preregistered, none changes a preregistered decision, and
-none reopens a threshold. H1 remains not supported with the kill criterion fired, H2 remains a pass
-for `gamma = 1.0` only, and H3 and H4 remain not supported for BDH. These scripts exist so the
-post-hoc numbers are reproducible, not so they can be promoted to findings.
+none reopens a threshold. Study 1's H1 remains not supported with its kill criterion fired, and
+Study 2's H6 remains not supported with its kill criterion fired: the "sigma as a linearly or
+bilinearly readable belief state" line stays closed. These scripts exist so the post-hoc numbers are
+reproducible, not so they can be promoted to findings.
 
-**They are read-only on `runs/` and `data/`.** Nothing here writes into either tree, retrains a
-model, or mutates a checkpoint. Two of the three do no model inference at all; the third only drives
-saved weights forward through the recorder. Each writes one JSON or one block of stdout, and nothing
-else.
+**They are read-only on the model tree.** Nothing here writes into `hbwm/`, retrains a model, or
+mutates a checkpoint. The executable tree that produced the published numbers is byte-identical to
+what ran. Several scripts do no model inference at all; the rest only drive saved weights forward.
+Each writes one JSON, or one block of stdout, and nothing else.
 
-## What each one does
+## The Study 1 set
 
 | script | what it measures | model inference? | output |
 |---|---|---|---|
-| `sigma_structure.py` | How sparse and how low-rank `sigma` is. Row-norm participation ratio, singular-value k90 / k99 / participation ratio, `x_sparse` zero fraction, and per-neuron write-mass concentration, at levels 0, 3 and 5 and at an early and a final timestep. | Yes. Drives one checkpoint through `SigmaRecorder`. | stdout |
-| `spatial_locality.py` | Whether the probe's errors are spatially *local* rather than scattered. Within-radius-1 and -2 accuracy against a per-row chance rate, Chebyshev and Manhattan error, expected distance under the full predictive distribution against a uniform and a row-shuffled null, marginal x and y decoding, and an agent-proximity control. | No. Reads saved probe `.npz` only. | `spatial_locality_results.json` |
-| `spatial_locality_buckets.py` | Whether that locality decays with steps since last seen. Everything in `spatial_locality.py` broken down by the six `steps_since_seen` buckets, plus Study 1's own `h2_curve` shape test applied to the graded metric, plus a Gaussian blur-scale calibration. Also recomputes exact-match accuracy per bucket as a correctness check against RESULTS.md's H2 table. | No. Reads saved probe `.npz` only. | `spatial_locality_buckets_results.json` |
+| `sigma_structure.py` | How sparse and how low-rank `sigma` is. Row-norm participation ratio, singular-value k90 / k99 / participation ratio, `x_sparse` zero fraction, per-neuron write-mass concentration. | Yes | stdout |
+| `spatial_locality.py` | Whether the probe's errors are spatially *local* rather than scattered. Within-radius accuracy against per-row chance, Chebyshev and Manhattan error, expected distance against uniform and row-shuffled nulls. | No | `spatial_locality_results.json` |
+| `spatial_locality_buckets.py` | The same, broken down by the six `steps_since_seen` buckets, plus Study 1's `h2_curve` shape test on the graded metric. | No | `spatial_locality_buckets_results.json` |
 
-`spatial_locality_buckets.py` builds on `spatial_locality.py` and uses the identical spec selection,
-so run them in that order if you want both outputs to agree.
+## The Study 2 set
+
+Written after Study 2 closed, to answer the question the two negatives left open: if the belief is
+not linearly readable out of `sigma`, is it there at all, and if so in what form? Run in this order
+if you want the narrative to build; each is independent.
+
+| script | what it asks | inference | output JSON (in `results2/`) |
+|---|---|---|---|
+| `memory_demand_of_objective.py` | Did the training objective ever reward remembering an out-of-view object's absolute position? Data only, no model. | No | stdout |
+| `memory_loss_attribution.py` | What share of each model's residual loss sits on the tokens that require that memory? | Yes | stdout |
+| `ykv_causal_patch.py` | **Causal.** Replace the associative read `yKV` with another episode's, one level at a time, and see which level's corruption selectively damages memory-dependent predictions. | Yes | `posthoc_ykv_causal.json` |
+| `ykv_head_patch.py` | The same intervention per `(level, head)`, plus an additivity test: is the whole-level effect the sum of its heads? | Yes | `posthoc_ykv_head_patch.json` |
+| `cancellation_index.py` | The `sum(a)/sum(w)` cancellation index that spec 4.8 measurement 4 defines but the shipped code never reported. Above 1 means writes reinforce, below 1 means they cancel. | Yes | `posthoc_cancellation.json` |
+| `cancellation_gamma_arms.py` | The same index for the `bdh_g099` and `bdh_g097` arms, to ask whether lower decay actually reduces interference. | Yes | `posthoc_cancellation_gamma.json` |
+| `decodability_vs_time.py` | Does probe accuracy erode as an episode progresses and writes accumulate, controlling for staleness? Pure re-slice of predictions Study 2 already saved. | No | `posthoc_decodability_vs_time.json` |
+| `sigma_content.py` | Not "is position in sigma" but "what IS in sigma". SVD of each head's state, with the right singular vectors decoded against the token embeddings. | Yes | `posthoc_sigma_content.json` |
+| `frozen_state_rollout.py` | Is the belief stored or continuously refreshed? Freeze the `sigma` update, wholesale and per level, and measure what degrades. | Yes | `posthoc_frozen_rollout.json` |
+
+`ykv_head_patch.py` and `frozen_state_rollout.py` import the token-class labelling, the `_attend`
+interceptor and the saturation guard from `ykv_causal_patch.py`, so that one must stay importable.
+
+## Two methodological traps these scripts document
+
+Both would have produced a plausible-looking result rather than an obvious error, so they are
+recorded here as well as in the write-up.
+
+- **Saturation.** An intervention severe enough to push overall cross entropy above about 1 nat
+  drives every token class to a floor worse than uniform, at which point a contrast between two
+  classes carries no information. Patching all six levels at once, and freezing `sigma` wholesale,
+  both do this. Those arms are reported as saturation references, and their contrasts are discarded
+  rather than presented as nulls. The graded per-level and per-head arms exist to get out of that
+  regime.
+- **Degenerate output columns.** `lm_head` columns for the ten tokens the model never predicts
+  (BOS, PAD, the four actions, and the out-of-range coordinates `X_9`, `X_10`, `Y_9`, `Y_10`) have
+  collapsed onto a single shared direction, mean pairwise cosine 0.9999, with inflated norms.
+  Ranking any direction against the full vocabulary returns those tokens first, as pure artifact.
+  `sigma_content.py` ranks over the trained vocabulary only and reports the degeneracy as a measured
+  field.
+
+A third, smaller one: `nn.LayerNorm(elementwise_affine=False)` is scale invariant, so multiplying an
+activation by a constant is not an intervention. The causal scripts change content, not scale.
 
 ## Running them
 
-All three expect the Study 1 worktree layout: a directory containing `runs/study1/...`,
-`data/grid9/...` and an importable `hbwm/`. In this repository those artifacts are gitignored and
-live in the sibling worktree `.claude/worktrees/study1-impl/`, which is the default.
+The Study 1 set expects the artifact worktree layout and is described by `HBWM_ROOT` and
+`HBWM_POSTHOC_OUT`, as before:
 
 ```sh
-# sigma_structure.py resolves runs/ and data/ relative to the WORKING DIRECTORY
-# (the checkpoint's own cfg.data_dir is "data/grid9"), so cd into the worktree
-# first and point at the script by path.
 cd .claude/worktrees/study1-impl
 uv run python ../../../analysis/posthoc/sigma_structure.py
 
-# The two spatial scripts take their root from HBWM_ROOT, which defaults to that
-# same worktree, so they run from anywhere. HBWM_POSTHOC_OUT chooses where the
-# JSON lands and defaults to the working directory.
 HBWM_POSTHOC_OUT=/tmp uv run python analysis/posthoc/spatial_locality.py
 HBWM_POSTHOC_OUT=/tmp uv run python analysis/posthoc/spatial_locality_buckets.py
 ```
 
-`sigma_structure.py` needs room for one checkpoint plus a 64-episode batch of `sigma`; it prefers MPS
-and falls back to CPU, and takes about 25 s wall time (about 19 s of that is the recorder pass). The
-two spatial scripts are pure NumPy over saved arrays and take seconds.
+The Study 2 set resolves the artifact worktree itself and runs from the repository root:
 
-Verified after the move: all three reproduce their reported numbers from these paths, and the two
-JSON outputs are byte-identical to the originals the RESULTS.md tables were written from.
+```sh
+uv run python analysis/posthoc/memory_demand_of_objective.py     # seconds, no GPU
+uv run python analysis/posthoc/decodability_vs_time.py           # under a minute, no GPU
+uv run python analysis/posthoc/memory_loss_attribution.py        # minutes
+uv run python analysis/posthoc/ykv_causal_patch.py               # about 1 h
+uv run python analysis/posthoc/ykv_head_patch.py                 # about 1 h
+uv run python analysis/posthoc/cancellation_index.py             # about 30 min
+uv run python analysis/posthoc/cancellation_gamma_arms.py        # about 35 min
+uv run python analysis/posthoc/sigma_content.py                  # about 15 min
+uv run python analysis/posthoc/frozen_state_rollout.py           # about 1 h
+```
+
+**Run the model-inference scripts one at a time.** Concurrent MPS jobs contend and one of them was
+killed mid-run during this work. On a laptop, also check that the charger is actually negotiating
+its full wattage: a 140 W adapter on a 100 W-rated cable delivers 94 W, which is less than sustained
+MPS load draws, so the battery drains while plugged in.
 
 ## Hard-coded choices worth knowing about
 
-- `sigma_structure.py` reads exactly one checkpoint, `runs/study1/bdh_g100_lr0.003/seed0/ckpt.pt`,
-  and the first 64 of the 2,000 `probe_test` episodes. It is not a cross-seed or cross-gamma
-  measurement, and the write-up says so.
-- Both spatial scripts hard-code the per-seed best BDH levels taken from
-  `runs/study1/results/table.json`: `sigma_full` at L3, L3, L4 and `sigma_rownorm` at L4, L3, L4.
-  Those selections came from `probe_val` during the original run, not from anything computed here.
-- Chance rates for the within-radius metrics are computed per row from the true cell's own
-  neighborhood size, which shrinks at grid edges and corners. The naive 9/81 and 25/81 would both be
-  wrong.
-
-## Provenance
-
-The only edits made when moving these scripts out of the scratchpad and into the repository were to
-the file paths: absolute session paths became `HBWM_ROOT` and `HBWM_POSTHOC_OUT` with defaults that
-resolve to this repository's worktree layout. No computation, constant, threshold or spec selection
-was changed, so the scripts as committed reproduce the numbers reported in RESULTS.md.
+- The Study 1 scripts read one checkpoint, `bdh_g100_lr0.003/seed0`, and hard-code the per-seed best
+  levels from `runs/study1/results/table.json`. Those selections came from `probe_val` during the
+  original run.
+- The Study 2 scripts default to the four checkpoint-levels Study 2 itself measured, seed 0 levels 3
+  and 4, seed 1 level 3, seed 2 level 4, with a seeded 1,024-pair subsample, so their numbers slot
+  alongside `results2/structure.json`.
+- Every script that drives the recorder batches over episodes at `batch_eps=32`. This is not a
+  tuning knob: the un-batched form holds roughly 12.6 GB of state and this project lost a checkpoint
+  to an OOM kill.
+- `cancellation_index.py` recomputes two quantities already published in `results2/structure.json`
+  and asserts they reproduce to under 1e-6 relative, which is what proves its sampling, its
+  rope-reconstructed query and its accumulator ordering match the pass the shipped code ran.
