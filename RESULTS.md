@@ -850,3 +850,247 @@ under "Post-hoc analyses (exploratory, not preregistered) (a) Sigma is structura
 lowish rank" and is labeled there with its checkpoint, levels and method. It is a different sample
 and a different normalization from the table here and the two are not interchangeable; the table
 here is the specified measurement.
+
+## Post-hoc follow-ups after Study 2 (exploratory, not preregistered)
+
+**These decide nothing, and nothing here is a rescue.** None of the four findings below was
+preregistered. None of them can support, refute or qualify H1 to H8, and none of them reopens a
+threshold. Study 2's H6 kill criterion fired, and the preregistered consequence stands exactly as
+written in spec section 7: the "sigma as a linearly or bilinearly readable belief state" line is
+**closed**. Nothing measured here reopens it. What these four do is characterize what is in sigma
+now that the readability question has been answered in the negative, which is a different question
+from the one the preregistration asked.
+
+Every number below is reproducible from a named script and, where one exists, a named JSON.
+
+### The objective did demand memory, and BDH is twice as good as the LSTM at supplying it
+
+A tempting reading of Study 1's and Study 2's negatives is that the task never rewarded remembering
+where an out-of-view object was, so there was nothing for a probe to find. That reading is wrong,
+and this is the measurement that rules it out.
+
+The first half is data only, no model and no GPU: `analysis/posthoc/memory_demand_of_objective.py`
+over all 2,000 `probe_test` episodes. It writes stdout, not a JSON.
+
+| quantity | value |
+|---|---|
+| window cells predicted per episode | 873 (9 per observation, 97 observations) |
+| window cells that are empty | 0.8430 |
+| window cells that are wall | 0.1245 |
+| window cells that are objects | 0.0325 |
+| of object-visible events: still in view from last step | 0.6949 |
+| of object-visible events: returning after an absence | 0.2133 |
+| of object-visible events: first sighting | 0.0919 |
+| returns where the object is STILL in the cell last seen | 0.9682 |
+| window cells where memory of an absent object could help | 11,716 of 1,746,000 = 0.671% |
+| the same, as a share of all 2,326,000 next-token predictions | 0.504% |
+| the same, restricted to absences of 9 or more steps | 5,404 = 0.310% of window cells |
+| absence length at the moment of return | median 8, p75 16, p90 32, max 94 steps |
+
+So memory of an absolute cell can pay off on 0.67% of window cells and 0.50% of predicted tokens,
+and 96.8% of returns are to the exact cell the object was last seen in, which is what makes a
+remembered cell worth anything at all.
+
+A token count is not a loss share. `analysis/posthoc/memory_loss_attribution.py` does one forward
+pass per checkpoint over `probe_test`, 3 seeds per model, no training and no probes, and splits the
+residual cross entropy by token class. Mean over 3 seeds, in nats:
+
+| model | overall CE | memory-relevant cells | share of total loss | object cells needing no memory |
+|---|---|---|---|---|
+| bdh_g100 | 0.02458 | 0.6832 | 0.1515 | 0.5778 |
+| lstm | 0.02910 | 1.3555 | 0.2556 | 0.5949 |
+| rwkv | 0.02423 | 0.6643 | 0.1504 | 0.5811 |
+
+Those cells are about half a percent of the tokens and carry 15 to 26 percent of the total loss, so
+the objective did press on them. And **BDH is roughly twice as good as the LSTM on exactly the
+predictions that require the memory** (0.683 against 1.356) while the three models are
+indistinguishable on object cells that need no memory (0.578, 0.595, 0.581). Whatever separates BDH
+from the LSTM here is specific to the memory-requiring predictions.
+
+Yet Study 2 found the LSTM's state **more** linearly decodable for position than BDH's sigma under
+the matched `mlp_state` family: lstm 0.146 against bdh_g100 0.101. **Decodability and functional
+use are dissociated in the direction that matters.** The model with the less decodable state uses
+its state better on the very tokens the decoding target was about. This is a concrete instance of
+the standard critique of probing: a probe's failure is evidence about the probe-model pair, not
+about the model. It does not soften H6, whose criterion was decodability and which failed on
+decodability.
+
+### Causal per-level activation patching of the associative read
+
+Probes are correlational. This is the causal test, from `analysis/posthoc/ykv_causal_patch.py`,
+reported in `runs/study1/results2/posthoc_ykv_causal.json`. On the loaded model instance only, and
+without editing `hbwm/`, the bound method `HBWMCore._attend` is monkeypatched so its return value
+during the parallel forward is replaced by the SAME tensor rolled one step along the batch axis.
+Each episode then receives a different episode's associative read: same marginal distribution, same
+norms, wrong content. 2,000 `probe_test` episodes, 3 seeds, `bdh_g100_lr0.003`, chunked at 25
+episodes so the roll is within a chunk.
+
+**Design note on why the intervention had to change content.** `self.ln` in
+`hbwm/bdh/upstream/bdh.py` is `nn.LayerNorm(D, elementwise_affine=False, bias=False)` and is
+therefore scale invariant. Scaling `_attend`'s output by a constant is a no-op and would have been a
+useless intervention.
+
+Token classes: c1 = window cell that is empty or wall, c3 = window cell holding an object that needs
+no memory (the control), c2 = window cell holding an object returning after an absence to the same
+cell it was last seen in (11,716 tokens, 0.55% of the 2,134,000 loss-masked tokens scored here).
+Deltas are against the intact model, whose overall CE is 0.0246 and whose class CEs are c1 0.0057,
+c2 0.6832, c3 0.5778. Mean over 3 seeds; `ratio` is the ratio of the mean deltas (`ratio_of_means`
+in the JSON), and `excess` is d c2 minus d c3.
+
+| condition | overall CE | d c1 | d c3 (control) | d c2 (memory) | excess | ratio | saturated |
+|---|---|---|---|---|---|---|---|
+| patched_L0 | 2.7652 | +1.2960 | +7.0340 | +9.1765 | +2.1425 | 1.30 | **yes** |
+| patched_L1 | 1.2108 | +0.7892 | +4.9569 | +7.3631 | +2.4062 | 1.49 | **yes** |
+| patched_L2 | 0.4984 | +0.1570 | +5.1246 | +5.9173 | +0.7927 | 1.15 | no |
+| patched_L3 | 0.1651 | +0.0236 | +4.3081 | +4.8766 | +0.5685 | 1.13 | no |
+| patched_L4 | 0.0892 | +0.0020 | +1.7645 | +3.9824 | +2.2179 | 2.26 | no |
+| patched_L5 | 0.0522 | -0.0014 | +0.4852 | +2.5948 | +2.1096 | 5.35 | no |
+| all levels patched | 4.2927 | +2.8992 | +10.6903 | +10.2810 | -0.4092 | 0.96 | **yes** |
+| all levels zeroed | 3.3563 | +3.0968 | +2.6765 | +2.6050 | -0.0715 | 0.97 | **yes** |
+
+**The saturated arms are discarded, not reported as nulls.** Above an overall CE of about 1 nat both
+object classes sit near a floor that is worse than uniform (uniform over the 34-token vocabulary is
+ln(34) = 3.53 nats, i.e. confidently wrong), so the c2 against c3 contrast cannot discriminate and
+its ratio is a ceiling artifact. That applies to `patched_L0`, `patched_L1` and both all-levels
+arms. The two all-levels arms are retained only as a saturation reference, and what they show is
+that the associative read is causally load-bearing for essentially every prediction, including
+trivially predictable empty and wall cells (d c1 of +2.90 and +3.10). That is not a finding about
+memory.
+
+**The result is the deep-level selectivity.** Patching L5 alone leaves the model nearly intact:
+overall CE moves from 0.0246 to 0.0522, empty and wall cells are unchanged at -0.0014, and control
+object cells take +0.4852. On memory-relevant cells the same patch costs **+2.5948 nats**, a 5.35x
+selectivity over the control. Those cells are 0.55% of scored tokens and account for **51.6% of all
+the extra nats that patch produces** (30,401 of 58,945 excess nats); at L4 the same share is 33.9%.
+This is causal evidence rather than correlational: the memory is carried by sigma's associative
+read, and it is concentrated in the deep levels.
+
+Note that the per-seed ratios are much more dispersed than the ratio of means: averaging the three
+per-seed ratios gives 4.34 at L4 and 16.77 at L5, because seed 0 and seed 2 have near-zero control
+damage at L5. The table reports the ratio of the mean deltas, which is the conservative summary.
+
+**Convergence with the Study 2 probe, and where it breaks.** Taking the most selective level per
+seed as the unsaturated level with the largest `excess`, the answer is L4, L5, L4 for seeds 0, 1, 2.
+Study 2's sigma probe selected best-on-validation levels [3, 4], [3] and [4] for the same seeds.
+Pooled over seeds the most selective level is L4, which is inside the probe's [3, 4]: they agree.
+Per seed, seeds 0 and 2 agree and **seed 1 does not** (patching says L5, the probe chose L3). The
+JSON records this as `agreement_per_seed` {0: true, 1: false, 2: true} with `agreement_pooled` true.
+The divergence is reported, not rounded away. Note also that under the alternative definition of
+"most selective" as the largest ratio rather than the largest excess, L5 wins in all three seeds, so
+the pooled convergence with the probe depends on the summary chosen.
+
+### Sigma is massively superposed
+
+Spec 4.8 measurement 4 defines a cancellation index that the shipped Study 2 code never reported.
+`analysis/posthoc/cancellation_index.py` computes it, writing
+`runs/study1/results2/posthoc_cancellation.json`. The index is sum(a) / sum(w), where a[h,n] is the
+squared norm of sigma row (h, n) at the sampled timestep and w[h,n] is the accumulated squared write
+mass routed into that row up to that timestep. 1,024 sampled `probe_train` examples per
+checkpoint-level, batched at 32 episodes, on the same four BDH checkpoint-levels Study 2 probes.
+
+**Validation.** The script recomputes two quantities already published in
+`runs/study1/results2/structure.json`, the row-norm and write-mass participation ratios, and
+reproduces all four checkpoint-levels to under 1e-6 relative error (worst case 7.6e-8). That is what
+establishes that its sampling, its rope-reconstructed query, and its accumulator ordering match the
+pass `measure_sigma_structure` actually ran.
+
+| checkpoint-level | index median [p10, p90] | top 1% rows | top 10% rows | Pearson r(w,a) | Spearman rho(w,a) | writes per row (median) |
+|---|---|---|---|---|---|---|
+| seed0 L3 | 6.17 [5.56, 7.16] | 1.21 | 1.70 | 0.16 | 0.75 | 147 |
+| seed0 L4 | 9.47 [7.37, 11.01] | 3.80 | 6.11 | 0.22 | 0.65 | 165.5 |
+| seed1 L3 | 4.90 [4.38, 5.74] | 0.52 | 1.76 | 0.11 | 0.79 | 142 |
+| seed2 L4 | 10.73 [7.81, 13.91] | 8.90 | 6.46 | 0.25 | 0.59 | 214 |
+
+**The arithmetic.** An index of 1 is what statistically independent writes would give, since their
+squared norms add. Perfect alignment of every write into a row would give an index equal to the
+number of writes into that row. With 142 to 214 writes per row and an index of only 4.9 to 10.7,
+only about 5 to 10 writes' worth of mass survives coherently: the ratio of realized to
+perfectly-aligned mass is 0.034 to 0.050, so **roughly 95% of everything routed into sigma is
+destroyed by interference**.
+
+The heavily written rows are the worst, not the best. The top-1% index is below the pooled median at
+**all four** checkpoint-levels, and at seed1 L3 it is 0.52, below 1, meaning those rows are actively
+cancelling rather than merely failing to add. The Pearson r of 0.11 to 0.25 against a Spearman rho
+of 0.59 to 0.79 says the same thing from another angle: realized row mass tracks routed write mass
+in rank order but not in magnitude, which is the signature of interference, not routing, setting the
+scale.
+
+`bdh_g100` runs at gamma = 1.0, confirmed as `decay_gamma` in every record, so nothing is ever
+forgotten and every write from the whole 1,164-step episode is still present to interfere.
+
+### Probing yKV, the model's own associative read: a negative result that refutes the leading hypothesis
+
+Nothing in Study 1 or Study 2 had ever probed `yKV`, the OUTPUT of the model's own associative read.
+Study 1 probed `sigma_full`, `sigma_rownorm`, `x_sparse` and `resid`; Study 2 probed reductions and
+readouts of sigma. All of them learn a STATIC query. The architecture reads sigma with an
+input-dependent, rope-rotated query, so the leading hypothesis after H6 failed was that position
+would be most linearly present in what that query actually extracts.
+
+`analysis/posthoc/ykv_probe.py`, reported in `runs/study1/results2/posthoc_ykv_probe.json`. The
+feature is `yKV = sum_n rope(relu(x_t @ W_enc), t)[h,n] * sigma[h,n,d]`, flattened over
+(n_head, n_embd), 256 dimensions, standardized, with a flat multinomial linear probe. Protocol
+matched to Study 2: 24,000 train, 20,244 val and 41,039 test pairs, 81 classes, L2 grid
+[1e-4, 1e-3, 1e-2, 1e-1], 20 epochs, lr 1e-3, batch 512, selected on `probe_val`, reported on
+`probe_test`, all 6 levels, 3 seeds. Chance is 0.011.
+
+| level | mean test accuracy over 3 seeds |
+|---|---|
+| L0 | 0.0325 |
+| L1 | 0.0402 |
+| L2 | 0.0481 |
+| L3 | 0.0540 |
+| L4 | 0.0574 |
+| L5 | 0.0558 |
+
+| seed | best level | best L2 | test accuracy | bootstrap 95% CI |
+|---|---|---|---|---|
+| 0 | L4 | 1e-4 | 0.0538 | [0.0508, 0.0570] |
+| 1 | L4 | 1e-3 | 0.0469 | [0.0442, 0.0498] |
+| 2 | L4 | 1e-4 | 0.0715 | [0.0679, 0.0750] |
+
+Mean at the best level 0.0574 (sd 0.0104 over the 3 seeds, as recorded in the JSON; the sample sd
+with Bessel's correction is 0.0127). Reference points, all from Study 2's table above:
+`flat_linear` on sigma 0.101, the best structured readout `derot_query_rank_r` 0.159, and the LSTM
+state's `mlp_state` 0.146.
+
+**The hypothesis is not supported.** yKV decodes position at about 5x chance, but roughly **half as
+well as raw sigma** and about a third as well as the best structured probe. Reading sigma the way
+the circuit reads it DISCARDS linearly decodable position rather than concentrating it.
+
+This is not an estimation artifact, and that is the point of choosing this feature. yKV is 256
+dimensions against 24,000 training pairs, so unlike the 524,288-dimensional flat probe on sigma this
+one is comfortably well conditioned. H5's estimation-efficiency explanation therefore does not
+apply, and the low number means genuine absence rather than a fitting failure.
+
+One corroboration is worth recording: yKV peaks at L4 for every seed, which is the same level the
+causal patching found most selective pooled over seeds.
+
+### What the four say together
+
+Composed honestly, and stated as an inference rather than a demonstration:
+
+- The information about where an out-of-view object is **is causally load-bearing**. Corrupting the
+  deep-level associative read costs +2.59 nats on exactly the tokens that need it while leaving the
+  rest of the model nearly intact, and those tokens absorb half the damage (finding 2).
+- It is **functionally used, and used better than the LSTM uses its own**. BDH halves the LSTM's
+  loss on the memory-requiring predictions while matching it everywhere else (finding 1).
+- It is **not linearly decodable anywhere tested**: not in sigma (0.101), not in sigma's row norms
+  under a linear readout, and not in the circuit's own extraction of sigma (0.057, finding 4), even
+  though the last of those is a well-conditioned 256-dimensional problem.
+- Finding 3 supplies a **candidate mechanism**. With gamma = 1.0 and 142 to 214 writes per row,
+  sigma is superposed to the point where roughly 95% of routed mass is destroyed by interference,
+  and the most heavily written rows cancel the hardest. What survives is a thin coherent residue
+  that the model's own input-dependent query can exploit at the moment it reads, but that no single
+  fixed direction can expose.
+
+That last point is a **hypothesis consistent with the measurements, not something the measurements
+establish**. Nothing here tests it directly. What the four together do support is that the
+representation looks **genuinely nonlinear and distributed**, which is a stronger and different
+claim from the format hypothesis Study 2 tested and rejected: H5 and H7 said the readout format
+matters somewhat but attributes to capacity, and these findings say the underlying encoding may not
+have a readable format at all. It remains an inference. Testing it would need an intervention that
+manipulates interference directly, for example a gamma sweep or a capacity sweep with the
+cancellation index as the dependent variable, and none of that was run.
+
+**None of this revises H1 to H8.** H6 is not supported, its kill criterion fired, and the
+linearly-or-bilinearly-readable-belief-state line stays closed.
