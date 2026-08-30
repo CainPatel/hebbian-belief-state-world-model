@@ -1,11 +1,63 @@
 # Hebbian Belief-State World Model (HBWM): Studies 1 and 2
 
-Does the plastic synapse state $\sigma$ of a BDH ("the Dragon Hatchling") core encode linearly
-readable beliefs about a partially observed gridworld? Study 1 trains three parameter-matched
-sequence models (BDH, LSTM, RWKV, about 1.58 M parameters each) to predict observations in a 9x9
-gridworld, reads their states with standardized linear probes, and decides four hypotheses (H1 to
-H4) under rules frozen before any run. **The answer is no: H1 failed, its preregistered kill
-criterion fired, and this is published as a preregistered negative result.**
+**Two preregistered studies asking whether a Hebbian synapse state holds readable beliefs. It does
+not. The reason turns out to be more interesting than the answer.**
+
+## Summary
+
+Three sequence models (BDH, LSTM, RWKV), matched at about 1.58 M parameters, are trained to predict
+what an agent sees as it walks a 9x9 gridworld through a 3x3 window. Objects the agent cannot see
+sometimes move. The question: once the agent has seen an object and then lost sight of it, is that
+object's location linearly readable out of the model's internal state?
+
+For BDH's plastic synapse state $\sigma$, the answer is no, twice over. Study 1 asked with flat
+linear probes. Study 2 asked again with readouts shaped like the architecture's own associative
+read, plus the capacity controls needed to tell "associative structure" apart from "more parameters
+and a nonlinearity". Both preregistered kill criteria fired. Every rule and threshold was frozen in
+a public commit before any run.
+
+What makes the negative interesting is what came after it. BDH predicts the data better than the
+LSTM whose state out-probes it. Post-hoc, on exactly the tokens that require remembering an unseen
+object, BDH's loss is half the LSTM's (0.68 nats against 1.36). A causal intervention then shows the
+memory really is carried by $\sigma$'s associative read: corrupting that read at a single layer
+costs 2.59 nats on those tokens while leaving everything else almost untouched. The model holds the
+information and uses it well. No linear or bilinear readout tested can get it out.
+
+| | outcome |
+|---|---|
+| **Study 1** (H1 to H4) | Flat linear probes on $\sigma$. H1 not supported, kill criterion fired. |
+| **Study 2** (H5 to H8) | Structured bilinear readouts and capacity controls. H6 not supported, kill criterion fired. H8 reversed a Study 1 verdict by fixing a clock artifact. |
+| **Post-hoc** | The memory is causally present and functionally used. $\sigma$ is superposed to the point where roughly 95% of what gets written into it is destroyed by interference. |
+
+## Background
+
+**What is BDH?** "The Dragon Hatchling" is a recent sequence architecture whose state is a plastic
+synapse matrix $\sigma$, updated Hebbian-style at every token: $\sigma \leftarrow \gamma\sigma + q
+\otimes x$, where $q$ is a sparse positive query derived from the current input. Instead of reading
+that state flatly, the model contracts a query against it, $y_{\mathrm{KV}}[h,d] = \sum_n q[h,n]\,
+\sigma[h,n,d]$. Part of the interest in this design is the claim that such a state should be more
+interpretable than an ordinary RNN hidden vector, because it looks like an addressable memory.
+
+**The task.** An agent walks a 9x9 grid and sees only the 3x3 window around itself. It reports what
+it sees as tokens, and the models are trained to predict the next token. Objects occasionally move
+while out of view, so a model that merely memorized a first sighting can be caught out.
+
+**What counts as a "belief".** The location of an object the agent has seen before and cannot
+currently see. This has a ground-truth answer at every step, so it can be scored. Chance is 0.011
+(81 cells) and a perfect memory of the last sighting scores 1.000 by construction.
+
+**What a probe is, and its limits.** A probe is a small classifier trained on a frozen model's
+internal state to predict something, here the object's cell. If the information is linearly present,
+a linear probe should find it. The catch, which this project ended up demonstrating concretely, is
+that a probe's failure is evidence about the probe and the model together, not about the model
+alone. Study 2 was built around that problem, and the post-hoc work found a clean case of it: the
+LSTM's state is the more linearly decodable one, and the LSTM is the worse memory user.
+
+**Why preregistration.** Probing studies have many degrees of freedom, and a determined analyst can
+usually find some readout that produces a positive result. Both studies fixed their hypotheses,
+comparators, thresholds and kill criteria in public commits before any run: Study 1 at
+`e674b1d`, Study 2 at `be8290e2` (tagged `study2-prereg`). Anything not in those commits is labelled
+post-hoc.
 
 ## Hypotheses tested
 
