@@ -1065,32 +1065,258 @@ apply, and the low number means genuine absence rather than a fitting failure.
 One corroboration is worth recording: yKV peaks at L4 for every seed, which is the same level the
 causal patching found most selective pooled over seeds.
 
-### What the four say together
+### Decodability erodes across an episode, and only in BDH
 
-Composed honestly, and stated as an inference rather than a demonstration:
+Finding 3 measured superposition and showed it was consistent with interference, but it did not
+demonstrate that interference is what costs the probe its accuracy. If it is, then accuracy should
+fall as an episode runs on and writes pile up. `analysis/posthoc/decodability_vs_time.py` tests
+that, reported in `runs/study1/results2/posthoc_decodability_vs_time.json`. It uses no GPU and
+trains nothing: it re-slices the per-pair test predictions Study 2 already saved in
+`probes2/<label>_test.npz`, which carry `probs`, `label`, `ep`, `t` and `bucket`. 41,039 test pairs,
+1,962 episodes, t from 1 to 96, 3 seeds per arm.
+
+**The confound control is the whole measurement.** `steps_since_seen` is itself correlated with `t`
+(Spearman rho = +0.2430 between t and the staleness bucket index, on every arm, since the split is
+shared), and accuracy is already known to fall with staleness: that is H2. A raw slope of accuracy
+against t would therefore be measuring H2 over again. The headline quantity is instead the slope of
+accuracy against t **within** each staleness bucket (buckets 1-4, 5-8, 9-16, 17-32, 33-64, 65+),
+which is a fixed-effects slope, with 95% confidence intervals bootstrapped over episode clusters,
+1,000 resamples. Both slopes are reported below so the control can be seen doing its work.
+
+| model and probe arm | pooled test accuracy | FE slope per step, staleness controlled | slope per step, no control | seeds with negative FE slope | seeds whose CI excludes zero |
+|---|---|---|---|---|---|
+| bdh_g100 `derot_query_rank` | 0.1593 | -3.048e-04 | -5.141e-04 | 2 of 3 | 3 of 3 |
+| bdh_g100 `flat_linear` | 0.1008 | -3.882e-04 | -4.297e-04 | 3 of 3 | 2 of 3 |
+| bdh_g100 `mlp_rownorm` | 0.1439 | -7.104e-04 | -8.093e-04 | 3 of 3 | 3 of 3 |
+| lstm `mlp_state` | 0.1456 | **+2.667e-04** | -4.205e-04 | 0 of 3 | 2 of 3 |
+| rwkv `mlp_state` | 0.1646 | **+2.592e-04** | -4.302e-04 | 0 of 3 | 2 of 3 |
+
+Without the control every arm slopes down, including both baselines, because every arm is partly
+just re-measuring staleness. With the control the two baselines **change sign**: the LSTM and RWKV
+states become slightly *more* decodable as the episode runs, once staleness is held fixed, and the
+significant seeds are significant in that positive direction. All three BDH arms stay negative.
+
+**The cross-model control is what makes this credible.** A task-side artifact, a sampling artifact
+in the probe split, or anything else about how the episodes were generated would hit all three
+models, since all five arms are scored on the same 41,039 pairs from the same 1,962 episodes. Only
+BDH erodes.
+
+Made legible: the strongest arm, `mlp_rownorm`, loses about 7.1e-04 accuracy per environment step,
+so across a 96 step episode at fixed staleness it loses about **0.068 accuracy on a base of 0.144**,
+close to a **47% relative erosion** of whatever the probe could read at the start.
+
+Two honest limits. The `derot_query_rank` arm is 2 of 3 seeds negative, not 3 of 3: seed 0's slope
+is +3.31e-04 with a CI that excludes zero, so one seed of the strongest Study 2 arm runs the other
+way. And this is **observational, not interventional**. Nothing was randomized; t was not
+manipulated; other things covary with t inside a bucket. The argument here rests on the baseline
+contrast, not on a randomization.
+
+### What sigma's leading directions actually encode
+
+Both preregistered studies asked whether object position is in sigma. Neither asked the prior
+question: what *is* in it? `analysis/posthoc/sigma_content.py`, reported in
+`runs/study1/results2/posthoc_sigma_content.json`, asks that. It is tractable only because each
+head's [2048, 64] state is effectively low rank, with a median k90 of 8 to 10 of 64 components.
+
+Method: SVD per head on 1,024 sampled `probe_train` examples per checkpoint-level, on the same four
+checkpoint-levels the other post-hoc analyses use, then decode each top right singular vector by
+cosine similarity against the token embedding matrix, and separately through `lm_head`. The
+consensus direction per (head, component) is taken across examples and the token families are
+weighted by the median squared singular value share of their component.
+
+| checkpoint-level | consensus top-1 embedding token families, energy weighted | OBJ share |
+|---|---|---|
+| seed0 L3 | WALL 68.2%, BOS 12.7%, X 10.3%, Y 5.6%, ACTION 2.7% | 0.5% |
+| seed0 L4 | WALL 68.1%, Y 13.9%, BOS 8.5%, X 6.1%, ACTION 1.6%, EMPTY 1.5% | 0.3% |
+| seed1 L3 | EMPTY 74.5%, X 7.9%, ACTION 7.3%, BOS 6.9%, OBJ 2.9%, Y 0.5% | 2.9% |
+| seed2 L4 | WALL 62.8%, X 20.4%, ACTION 8.0%, Y 6.8%, BOS 1.3% | 0.7% |
+
+Spectrum, stability and row support, medians over the 4,096 example-head pairs per checkpoint-level:
+
+| checkpoint-level | top-1 singular value share | k90 | k99 | spectral participation ratio | top-1 mean pairwise abs cosine across examples | neuron participation ratio of the top-1 left vector |
+|---|---|---|---|---|---|---|
+| seed0 L3 | 0.585 | 10 | 32 | 2.78 | 0.955 | 52.3 of 2048 |
+| seed0 L4 | 0.637 | 8 | 29 | 2.37 | 0.944 | 55.1 of 2048 |
+| seed1 L3 | 0.672 | 9 | 32 | 2.17 | 0.965 | 39.8 of 2048 |
+| seed2 L4 | 0.558 | 10 | 30 | 3.00 | 0.911 | 55.3 of 2048 |
+
+The stability column is measured against a random baseline of 0.100 for the same statistic on the
+same number of random unit vectors in 64 dimensions, so the observed 0.911 to 0.965 is 9.1x to 9.6x
+baseline. **The basis is shared across examples, not fitted per example.** Sigma holds an
+example-independent set of leading directions, and a single component carries 56% to 67% of each
+head's spectral energy while spreading over only 40 to 55 of 2,048 neurons.
+
+**The point.** Sigma's leading directions align with cell-type and coordinate tokens, and barely at
+all with object tokens: 0.3% to 2.9% of the top directions' energy. Set that against the observation
+statistics from finding 1, where 84.30% of window cells are empty, 12.45% are wall and 3.25% hold
+objects (the JSON records these as 0.843, 0.125 and 0.0325). **Sigma's dominant content mirrors the
+frequency structure of what the agent sees**, not the rare thing a position probe is asking about.
+
+**The limit, stated as the script itself states it.** A leading direction aligned with EMPTY says
+what dominates the top components. It does not say that object information is absent from the
+remaining ones. Nothing here shows objects are not encoded; it shows they are not what the largest
+directions are for.
+
+**Methodological note, and the reason this decoding is not garbage.** The `lm_head` columns for the
+ten tokens the model never predicts (BOS, PAD, the four actions, X_9, X_10, Y_9, Y_10) have
+collapsed onto a single shared direction: mean pairwise absolute cosine among them of 0.9999, with
+inflated norms, median 5.32 against 2.43 for trained columns. Gradient never distinguished them, so
+they are free to sit on top of each other and grow. Ranking a singular vector against the full
+34-token vocabulary therefore returns those ten as the top hits, at nearly identical projection
+values, for essentially any input direction. The JSON's `lm_head_top_tokens_all_vocab` field
+preserves what that looks like: for seed0 L3 head 0 the unrestricted top five are PAD, X_10, A_S,
+Y_6 and A_E at -0.3057, -0.3055, -0.3054, -0.3053 and -0.3053, which is an artifact wearing the
+costume of a result. Both decodings are therefore restricted to the trained vocabulary, 29 tokens
+for the embedding and 24 for `lm_head`, and the degeneracy is recorded as a measured field
+(`decoding_vocabulary.lm_head_degeneracy`) rather than silently patched.
+
+### The gamma arms never tested the interference mechanism
+
+If interference is what erodes decodability, the obvious next question is expensive: would
+retraining with a decay that actually suppresses accumulation help?
+`analysis/posthoc/cancellation_gamma_arms.py`, reported in
+`runs/study1/results2/posthoc_cancellation_gamma.json`, buys a cheap proxy for it by running
+finding 3's cancellation index on Study 1's existing gamma arms.
+
+RESULTS.md already flags the parameterization problem: Study 1's gamma decays **per token**, and
+there are 12 tokens per environment step, so gamma = 0.99 is 0.8864 per environment step and
+gamma = 0.97 is 0.6938. The arms are much weaker decays than their labels suggest.
+
+| arm | gamma per token | gamma per environment step | cancellation index, median | writes per row, median | Study 1 `sigma_full` test accuracy |
+|---|---|---|---|---|---|
+| bdh_g100 | 1.00 | 1.0000 | 5.534 | 144.5 | 0.1010 |
+| bdh_g099 | 0.99 | 0.8864 | 4.007 | 100.5 | 0.0989 |
+| bdh_g097 | 0.97 | 0.6938 | 3.996 | 91.0 | 0.0649 |
+
+The index and writes columns are means over the seeds that can be matched at L3, which is seeds 0
+and 1, because the g100 baseline records L4 rather than L3 for seed 2. The accuracy column is the
+mean over all 3 seeds at each arm's best level, against a chance of 0.0114.
+
+**The result runs the wrong way, and that is the finding.** Lower gamma **lowered** the cancellation
+index, from 5.534 to about 4.00, rather than raising it. Decay did do what decay does: accumulation
+fell, with writes per row dropping from 144.5 to 91.0. But the mass that survived became **less
+coherent, not more**. Decay attenuated the constructive part along with the interfering part, so the
+ratio of realized to routed mass got worse, not better.
+
+**Therefore the gamma arms never manipulated interference at all**, and their worse probe accuracy
+(0.065 at gamma = 0.97 against 0.101 at gamma = 1.0) says nothing whatever about whether reducing
+interference would help decodability. Both quantities moved down together, which is exactly the
+pattern a shared cause produces and exactly the pattern a test of the mechanism must avoid. The
+confound RESULTS.md flags is real and remains unresolved, and **a retrain with a decay parameterized
+per environment step is still open and still motivated**.
+
+This is a description of those three checkpoints as they were trained. It is not a controlled
+manipulation of interference, and it cannot be read as one.
+
+### The memory machinery localizes to a few separable per-head channels
+
+Finding 2 patched a whole level of the associative read at a time.
+`analysis/posthoc/ykv_head_patch.py`, reported in
+`runs/study1/results2/posthoc_ykv_head_patch.json`, narrows the same intervention to single
+(level, head) pairs at the two levels that showed selectivity, L4 and L5.
+Same protocol as finding 2: 2,000 `probe_test` episodes, chunked at 25, 3 seeds of
+`bdh_g100_lr0.003`, 2,134,000 loss-masked tokens scored per condition. Token classes are as in
+finding 2, and the intact model's overall CE is 0.0246. The `ratio` column is the ratio of the mean
+deltas (`ratio_of_means`), the conservative summary, and `excess` is d c2 minus d c3. No condition
+saturated.
+
+| condition | overall CE | d c1 | d c3 (control) | d c2 (memory) | excess | ratio |
+|---|---|---|---|---|---|---|
+| patched_L4H0 | 0.0300 | -0.0005 | +0.0473 | +0.7888 | +0.7415 | 16.66 |
+| patched_L4H1 | 0.0265 | -0.0004 | +0.0446 | +0.2437 | +0.1991 | 5.47 |
+| patched_L4H2 | 0.0317 | +0.0000 | +0.1771 | +0.6114 | +0.4343 | 3.45 |
+| patched_L4H3 | 0.0293 | -0.0004 | +0.0328 | +0.7811 | +0.7483 | 23.79 |
+| patched_L4 (whole level) | 0.0892 | +0.0020 | +1.7645 | +3.9824 | +2.2179 | 2.26 |
+| patched_L5H0 | 0.0278 | +0.0001 | -0.0026 | +0.5729 | +0.5755 | not interpretable |
+| patched_L5H1 | 0.0260 | -0.0003 | +0.0203 | +0.2068 | +0.1865 | 10.18 |
+| patched_L5H2 | 0.0265 | -0.0005 | +0.0430 | +0.2690 | +0.2260 | 6.25 |
+| **patched_L5H3** | 0.0296 | -0.0010 | +0.0470 | **+0.8432** | **+0.7962** | **17.95** |
+| patched_L5 (whole level) | 0.0522 | -0.0014 | +0.4852 | +2.5948 | +2.1096 | 5.35 |
+
+`patched_L5H0`'s ratio is left out because its mean control delta is slightly negative (-0.0026), so
+the ratio of means is -220.35, a division artifact rather than an enormous selectivity. Its excess
+is still well defined and is reported.
+
+**Additivity**, which is the structural question:
+
+| level | sum of per-head excess | whole-level excess | sum over whole | verdict | top head | top head's share of the positive per-head sum |
+|---|---|---|---|---|---|---|
+| L4 | +2.1232 | +2.2179 | 0.96 | approximately additive | H3 | 35.2% |
+| L5 | +1.7842 | +2.1096 | 0.85 | approximately additive | H3 | 44.6% |
+
+The additivity band in the JSON is [0.80, 1.25]; both levels sit inside it. That means the heads are
+**separable**: each contributes its own damage independently. They are not redundant, which would
+show as sub-additive because any head could substitute for the others, and they do not act jointly,
+which would show as super-additive because the effect would need them together.
+
+**The point.** The memory-specific machinery is neither diffusely smeared across the network nor
+concentrated in a single point. It is a small number of separable per-head channels in the deep
+levels. Corrupting **one of the model's 24 associative reads** (6 levels times 4 heads) costs 0.84
+nats on memory-relevant tokens, which are 0.55% of scored tokens, while leaving empty and wall cells
+untouched at -0.0010.
+
+**Caveat, and it matters.** Per-head effects are small in absolute terms, so the per-seed pattern is
+noisier than the level-wise result was. Checking which head is top per seed rather than pooled: at
+L4, H3 is the largest excess in **2 of 3 seeds** (seeds 1 and 2; seed 0 puts H0 top). At L5, H3 is
+top in only **1 of 3 seeds** (seed 2); H0 is top in the other two. So "H3 is the most selective
+head" is a statement about the pooled mean, and at L5 the pooled mean is carried substantially by
+seed 2, whose H3 excess is +1.4727 against +0.0684 and +0.8475 at seeds 0 and 1. The additivity
+result and the localization claim survive this, since both are about the shape of the per-head
+profile rather than about which index wins. The identity of the single most selective head does not.
+
+### What the eight say together
+
+Composed honestly, and stated as an inference rather than a demonstration. The line the whole set
+has to hold is this: **the information is causally present, and functionally used better than the
+LSTM uses its own, yet it is not linearly decodable anywhere tested.**
 
 - The information about where an out-of-view object is **is causally load-bearing**. Corrupting the
   deep-level associative read costs +2.59 nats on exactly the tokens that need it while leaving the
-  rest of the model nearly intact, and those tokens absorb half the damage (finding 2).
+  rest of the model nearly intact, and those tokens absorb half the damage (finding 2). Narrowing
+  the same intervention to single heads shows the machinery is **a small number of separable
+  channels**, approximately additive at both deep levels, where corrupting one of 24 associative
+  reads costs 0.84 nats on memory-relevant tokens and nothing measurable elsewhere (finding 8).
 - It is **functionally used, and used better than the LSTM uses its own**. BDH halves the LSTM's
   loss on the memory-requiring predictions while matching it everywhere else (finding 1).
 - It is **not linearly decodable anywhere tested**: not in sigma (0.101), not in sigma's row norms
   under a linear readout, and not in the circuit's own extraction of sigma (0.057, finding 4), even
   though the last of those is a well-conditioned 256-dimensional problem.
-- Finding 3 supplies a **candidate mechanism**. With gamma = 1.0 and 142 to 214 writes per row,
-  sigma is superposed to the point where roughly 95% of routed mass is destroyed by interference,
-  and the most heavily written rows cancel the hardest. What survives is a thin coherent residue
-  that the model's own input-dependent query can exploit at the moment it reads, but that no single
-  fixed direction can expose.
 
-That last point is a **hypothesis consistent with the measurements, not something the measurements
-establish**. Nothing here tests it directly. What the four together do support is that the
-representation looks **genuinely nonlinear and distributed**, which is a stronger and different
-claim from the format hypothesis Study 2 tested and rejected: H5 and H7 said the readout format
-matters somewhat but attributes to capacity, and these findings say the underlying encoding may not
-have a readable format at all. It remains an inference. Testing it would need an intervention that
-manipulates interference directly, for example a gamma sweep or a capacity sweep with the
-cancellation index as the dependent variable, and none of that was run.
+**Findings 3, 5 and 6 now supply a mechanism with three independent supports.**
 
-**None of this revises H1 to H8.** H6 is not supported, its kill criterion fired, and the
-linearly-or-bilinearly-readable-belief-state line stays closed.
+- **What sigma stores.** Its dominant directions align with cell-type and coordinate tokens, with
+  objects at 0.3% to 2.9% of the leading energy, mirroring the frequency structure of the
+  observation stream rather than the rare event the probe asks about (finding 6).
+- **What happens to what is stored.** With gamma = 1.0 and 142 to 214 writes per row, roughly 95% of
+  all routed write mass is destroyed by interference, and the most heavily written rows cancel the
+  hardest (finding 3).
+- **What that costs over time.** Decodability visibly erodes as writes accumulate within an episode,
+  at fixed staleness, in all three BDH arms and in neither baseline, by about 47% relative across an
+  episode on the strongest arm (finding 5).
+
+Those three are independent in method as well as in content: an SVD of the state, an accounting
+identity over write mass, and a re-slicing of saved predictions with a cross-model control. They
+point the same way. What survives in sigma is a thin coherent residue that the model's own
+input-dependent, rope-rotated query can exploit at the moment it reads, but that no single fixed
+direction can expose.
+
+**This is a well-supported inference and it is not a demonstration.** Every one of the three
+supports is observational. None of them manipulates interference and watches decodability respond,
+which is the only form of evidence that would settle it. **The one intervention that would
+demonstrate it is a retrain with a decay parameterized per environment step**, with the cancellation
+index as the manipulation check and probe accuracy as the outcome. Finding 7 establishes that the
+existing gamma arms **cannot substitute for that retrain**: their per-token decay lowered the
+cancellation index rather than raising it, attenuating the constructive mass along with the
+interfering mass, so those arms never manipulated the mechanism and their worse probe accuracy
+carries no information about it.
+
+What the set does support, and support well, is that the representation is **genuinely nonlinear and
+distributed**, which is a stronger and different claim from the format hypothesis Study 2 tested and
+rejected. H5 and H7 said the readout format matters somewhat but attributes to capacity; these
+findings say the underlying encoding may have no readable format at all.
+
+**None of this revises H1 to H8, and both kill criteria stand.** Study 1's kill criterion fired on
+H1 failing against the LSTM state, and Study 2's fired on H6, and neither is reopened by anything
+above: H6 is not supported and the linearly-or-bilinearly-readable-belief-state line stays closed.
+Nothing above is preregistered, nothing above reopens a threshold, and no post-hoc finding added
+later can change that.
