@@ -1264,7 +1264,104 @@ seed 2, whose H3 excess is +1.4727 against +0.0684 and +0.8475 at seeds 0 and 1.
 result and the localization claim survive this, since both are about the shape of the per-head
 profile rather than about which index wins. The identity of the single most selective head does not.
 
-### What the eight say together
+### The belief is continuously refreshed, not stored
+
+Findings 2 and 8 show that corrupting the associative read damages memory-relevant predictions.
+They do not say whether sigma is a **store**, written once when the object is seen and read back
+later, or something the model has to keep rewriting. `analysis/posthoc/frozen_state_rollout.py`,
+reported in `runs/study1/results2/posthoc_frozen_rollout.json`, separates those two by letting the
+episode run normally up to a cutoff and then stopping sigma's updates from that point on. 200
+`probe_test` episodes, chunked at 50, 3 seeds of `bdh_g100_lr0.003`, driven through the
+**recurrent** path so that updates can be suppressed mid-episode. Token classes are as in finding 2.
+
+**The correctness check comes first, because it licenses everything after.** The recurrent path is
+not the path the rest of this document scores on. Run with plasticity `full` and no freezing, it
+reproduces the parallel path's per-class cross entropies on the same episodes to about 1e-08. Seed
+0, in nats:
+
+| quantity | recurrent | parallel | absolute difference |
+|---|---|---|---|
+| overall | 0.023940 | 0.023940 | 1.14e-08 |
+| class 1, empty or wall | 0.005557 | 0.005557 | 1.55e-08 |
+| class 3, object needing no memory | 0.593761 | 0.593761 | 0.00e+00 |
+| class 2, memory-relevant object | 0.563922 | 0.563922 | 5.29e-08 |
+
+Seeds 1 and 2 agree to 6.86e-09 and 7.72e-09 overall. The two paths are the same computation.
+
+**How the freeze is implemented, and why the assertions matter.** The per-level arms keep plasticity
+`full` and undo the write instead: the frozen levels' `state.sigma` slices are restored to a
+cut-time clone after every step from the cut onward, so the value entering every later step is the
+cut-time value, which is exactly equivalent to those levels never updating. "We froze it" is
+otherwise an unverified claim, so the script **asserts**, per run, that the frozen levels did write
+before each restore, that they are bit-identical after it, that an unfrozen level did move, and that
+the restore count equals the number of steps after the cut. Every arm reported below passed all
+four. `hbwm/` is not touched.
+
+The headline window is `post_cut`, the masked target positions at or after the cutoff, which is the
+only region where the intervention is active. Deltas are against the `full` baseline restricted to
+the same window, whose overall CE is 0.0164, 0.0159 and 0.0144 at the 25%, 50% and 75% cutoffs; the
+intact model's overall CE over the whole 200-episode subset is 0.0243. `excess` is d c2 minus d c3,
+so **positive means freezing hurt memory-relevant tokens more than the matched no-memory control**.
+Means over 3 seeds, in nats, with the per-seed excess range beside them. T_run is 1163 tokens and
+the cutoffs sit at positions 291, 582 and 872, leaving 1013, 691 and 350 class-2 tokens in window.
+
+| condition | overall CE | d c1 | d c3 (control) | d c2 (memory) | excess | per-seed excess range |
+|---|---|---|---|---|---|---|
+| frozen@25 (all levels) | 3.4751 | +1.5959 | +8.5600 | +7.9448 | -0.6151 | [-0.7808, -0.5166] SATURATED |
+| scaled0@25 (all levels) | 3.4751 | +1.5959 | +8.5600 | +7.9448 | -0.6151 | [-0.7808, -0.5166] SATURATED |
+| frzL0123@25 (shallow) | 3.4947 | +1.7786 | +9.1530 | +8.7057 | -0.4473 | [-0.5552, -0.3605] SATURATED |
+| frzL45@25 (deep) | 0.0874 | +0.0033 | +1.9307 | +4.2868 | **+2.3561** | [+1.3377, +3.2497] |
+| **frzL5@25 (deep)** | 0.0316 | -0.0010 | +0.3094 | +1.5384 | **+1.2289** | [+0.8285, +1.4604] |
+| frozen@50 (all levels) | 3.7357 | +1.7930 | +9.2437 | +8.5922 | -0.6514 | [-0.9991, -0.3451] SATURATED |
+| scaled0@50 (all levels) | 3.7357 | +1.7930 | +9.2437 | +8.5922 | -0.6514 | [-0.9991, -0.3451] SATURATED |
+| frzL0123@50 (shallow) | 3.6198 | +1.8957 | +9.5401 | +9.0947 | -0.4454 | [-0.7528, -0.2280] SATURATED |
+| frzL45@50 (deep) | 0.0823 | +0.0002 | +1.9837 | +4.1261 | **+2.1424** | [+0.9172, +3.1171] |
+| **frzL5@50 (deep)** | 0.0296 | -0.0010 | +0.3066 | +1.3183 | **+1.0116** | [+0.6460, +1.2577] |
+| frozen@75 (all levels) | 4.1268 | +2.3518 | +9.7903 | +8.5825 | -1.2078 | [-1.7254, -0.8822] SATURATED |
+| scaled0@75 (all levels) | 4.1268 | +2.3518 | +9.7903 | +8.5825 | -1.2078 | [-1.7254, -0.8822] SATURATED |
+| frzL0123@75 (shallow) | 3.9586 | +2.2997 | +9.8161 | +9.0925 | -0.7236 | [-0.9537, -0.5846] SATURATED |
+| frzL45@75 (deep) | 0.0726 | +0.0005 | +1.9803 | +3.1324 | **+1.1521** | [-0.0503, +2.1028] |
+| **frzL5@75 (deep)** | 0.0249 | -0.0006 | +0.2714 | +0.9047 | **+0.6333** | [+0.3269, +0.8627] |
+
+The saturation flag fires when an arm's overall CE exceeds 1.0 nat. The `all` window, which includes
+the untouched prefix, is also in the JSON; it dilutes the same effect and is not the headline.
+
+**The point.** Freezing sigma's writes at level 5 leaves the model **essentially untouched overall**
+(0.0249 to 0.0316 in window, against 0.0144 to 0.0164 intact in the same window and 0.0243 over the
+whole subset) yet costs roughly **0.6 to 1.2 nats specifically on memory-dependent tokens**, while
+empty and wall cells move by -0.0010 to -0.0006, which is to say not at all. If sigma were a
+write-once store, freezing it **after** the object had already been recorded should be harmless,
+because the record would already be present. It is not harmless. **The model has to keep re-writing
+the belief to retain it.** The deep freezes are consistent in sign across all three cutoffs, and
+per-seed the sign holds at every seed in every deep arm except one seed of frzL45@75, whose excess
+is -0.0503, marginally the wrong way.
+
+There is a **gradient** as well: the excess shrinks as the cutoff moves later, +1.2289, +1.0116,
++0.6333 at frzL5, and +2.3561, +2.1424, +1.1521 at frzL45. That is what you would expect if a later
+cutoff leaves fewer remaining steps of refreshing to lose. It is **consistent with the reading, not
+independent proof of it**, since a later cutoff also shortens the affected window and changes its
+token mix.
+
+**The control, and the arm that failed.** The wholesale `frozen` and `scaled0` arms saturate at
+every cutoff (3.48 to 4.13), and so does freezing only the **shallow** levels 0 to 3 (3.49, 3.62,
+3.96), while the deep freezes do not. As the script's diagnosis block states, **saturation is a fact
+about the intervention and not a null for the belief hypothesis.** Sigma is the whole associative
+memory rather than a separable long-term store, so freezing all of it also removes the read of the
+last few tokens, which carry the agent's current coordinates and current observation window. The
+damage to **class 1**, empty and wall cells that need no memory whatever, shows that directly:
++1.5959 to +2.3518 nats on tokens the memory hypothesis says should be untouched. With every class
+pinned far above chance, the class-2 versus class-3 contrast in those arms is a ceiling artifact and
+is discarded. What raises this above a convenient excuse is that the **shallow-versus-deep asymmetry
+confirms the diagnosis rather than assuming it**: the shallow freeze saturates and the deep freeze
+does not, which is exactly the predicted pattern if the shallow levels are what carry current
+context. The bounded negative result stands on its own: **sigma cannot be ablated as memory
+separately from current context by freezing it wholesale.**
+
+**One arm is not evidence.** At gamma = 1.0 there is no decay to keep, so `scaled0` (decay kept,
+writes stopped) and `frozen` (both stopped) are the **same computation**. Their exact agreement in
+the table above is a code-path identity check, not independent evidence, and the script says so.
+
+### What the nine say together
 
 Composed honestly, and stated as an inference rather than a demonstration. The line the whole set
 has to hold is this: **the information is causally present, and functionally used better than the
@@ -1282,7 +1379,7 @@ LSTM uses its own, yet it is not linearly decodable anywhere tested.**
   under a linear readout, and not in the circuit's own extraction of sigma (0.057, finding 4), even
   though the last of those is a well-conditioned 256-dimensional problem.
 
-**Findings 3, 5 and 6 now supply a mechanism with three independent supports.**
+**Findings 3, 5 and 6 supply a mechanism with three independent supports.**
 
 - **What sigma stores.** Its dominant directions align with cell-type and coordinate tokens, with
   objects at 0.3% to 2.9% of the leading energy, mirroring the frequency structure of the
@@ -1300,23 +1397,35 @@ point the same way. What survives in sigma is a thin coherent residue that the m
 input-dependent, rope-rotated query can exploit at the moment it reads, but that no single fixed
 direction can expose.
 
-**This is a well-supported inference and it is not a demonstration.** Every one of the three
-supports is observational. None of them manipulates interference and watches decodability respond,
-which is the only form of evidence that would settle it. **The one intervention that would
-demonstrate it is a retrain with a decay parameterized per environment step**, with the cancellation
-index as the manipulation check and probe accuracy as the outcome. Finding 7 establishes that the
-existing gamma arms **cannot substitute for that retrain**: their per-token decay lowered the
-cancellation index rather than raising it, attenuating the constructive mass along with the
-interfering mass, so those arms never manipulated the mechanism and their worse probe accuracy
-carries no information about it.
+**Finding 9 composes with those three into a rehearsal-versus-interference tradeoff.** Freezing
+sigma's writes at the deepest level after the object has already been seen costs 0.6 to 1.2 nats on
+memory-relevant tokens while leaving the model otherwise intact, so **the model must keep re-writing
+the belief or lose it**. Yet finding 3 says every one of those writes adds to the pile-up that
+destroys roughly 95% of routed write mass, and finding 5 says decodability erodes as they
+accumulate. The two pull against each other. On that reading sigma is **not a memory that holds but
+one that must be actively maintained against its own interference**, and that is a candidate
+explanation for the line at the top of this section: the information can be causally efficacious
+while exposed to no fixed linear direction, because **there is no stable stored vector to read, only
+a continuously refreshed one**.
+
+**This is a well-supported inference and it is not a demonstration.** The three supports for the
+mechanism are observational, and the tradeoff is an inference that composes several measurements
+rather than a mechanism anyone has demonstrated: no experiment here manipulates interference and
+watches either decodability or the refresh requirement respond, which is the only form of evidence
+that would settle it. **The one intervention that would test it directly is a retrain with a decay
+parameterized per environment step**, with the cancellation index as the manipulation check and
+probe accuracy as the outcome. Finding 7 establishes that the existing gamma arms **cannot
+substitute for that retrain**: their per-token decay lowered the cancellation index rather than
+raising it, attenuating the constructive mass along with the interfering mass, so those arms never
+manipulated the mechanism and their worse probe accuracy carries no information about it.
 
 What the set does support, and support well, is that the representation is **genuinely nonlinear and
 distributed**, which is a stronger and different claim from the format hypothesis Study 2 tested and
 rejected. H5 and H7 said the readout format matters somewhat but attributes to capacity; these
 findings say the underlying encoding may have no readable format at all.
 
-**None of this revises H1 to H8, and both kill criteria stand.** Study 1's kill criterion fired on
-H1 failing against the LSTM state, and Study 2's fired on H6, and neither is reopened by anything
+**None of the nine revises H1 to H8, and both kill criteria stand.** Study 1's kill criterion fired
+on H1 failing against the LSTM state, and Study 2's fired on H6, and neither is reopened by anything
 above: H6 is not supported and the linearly-or-bilinearly-readable-belief-state line stays closed.
-Nothing above is preregistered, nothing above reopens a threshold, and no post-hoc finding added
-later can change that.
+**Sigma is not a linearly or bilinearly readable belief state.** Nothing above is preregistered,
+nothing above reopens a threshold, and no post-hoc finding added later can change that.
