@@ -853,11 +853,11 @@ here is the specified measurement.
 
 ## Post-hoc follow-ups after Study 2 (exploratory, not preregistered)
 
-**These decide nothing, and nothing here is a rescue.** None of the four findings below was
+**These decide nothing, and nothing here is a rescue.** None of the nine findings below was
 preregistered. None of them can support, refute or qualify H1 to H8, and none of them reopens a
 threshold. Study 2's H6 kill criterion fired, and the preregistered consequence stands exactly as
 written in spec section 7: the "sigma as a linearly or bilinearly readable belief state" line is
-**closed**. Nothing measured here reopens it. What these four do is characterize what is in sigma
+**closed**. Nothing measured here reopens it. What these nine do is characterize what is in sigma
 now that the readability question has been answered in the negative, which is a different question
 from the one the preregistration asked.
 
